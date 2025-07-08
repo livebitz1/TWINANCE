@@ -7,11 +7,9 @@ import DashboardNavbar from "@/components/DashboardNavbar";
 import FinancialSummaryCard from "@/components/FinancialSummaryCard";
 import BudgetChart from "@/components/BudgetChart";
 import AIAssistant from "@/components/AIAssistant";
-import AIInsights from "@/components/AIInsights";
 import BankStatementUpload from "@/components/BankStatementUpload";
 import TransactionHistory from "@/components/TransactionHistory";
 import { BankStatementProvider, useBankStatement } from "@/contexts/BankStatementContext";
-import { Toaster } from "@/components/ui/toaster";
 
 // The inner dashboard component that uses the BankStatement context
 function DashboardContent() {
@@ -35,49 +33,25 @@ function DashboardContent() {
               <BankStatementUpload onUploadSuccess={() => setHasUploadedStatement(true)} />
             </div>
           ) : (
-            <>
-              {/* Account Info Banner */}
-              {financialData.accountDetails && financialData.statementPeriod && (
-                <div className="mb-6 p-4 rounded-lg bg-primary/5 border border-primary/20 backdrop-blur-sm">
-                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <div>
-                      <h2 className="text-lg font-medium">{financialData.accountDetails.accountHolder}</h2>
-                      <div className="flex flex-wrap gap-x-6 gap-y-1 mt-1 text-sm text-muted-foreground">
-                        <div>Account: {financialData.accountDetails.accountNumber}</div>
-                        <div>Type: {financialData.accountDetails.accountType}</div>
-                        <div>Bank: {financialData.accountDetails.bankName}</div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-medium">Statement Period</div>
-                      <div className="text-sm text-muted-foreground">
-                        {financialData.statementPeriod.startDate} to {financialData.statementPeriod.endDate}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8">
+              <FinancialSummaryCard 
+                title="TOTAL BALANCE" 
+                amount={financialData.totalBalance} 
+                description={`You have extra ${financialData.comparedToLastMonth} compared to last month`} 
+              />
               
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8">
-                <FinancialSummaryCard 
-                  title="TOTAL BALANCE" 
-                  amount={financialData.totalBalance} 
-                  description={`You have extra ${financialData.comparedToLastMonth} compared to last month`} 
-                />
-                
-                <FinancialSummaryCard 
-                  title="INCOME" 
-                  amount={financialData.income}
-                  transactions={financialData.incomeTransactions} 
-                />
-                
-                <FinancialSummaryCard 
-                  title="EXPENSES" 
-                  amount={financialData.expenses}
-                  transactions={financialData.expenseTransactions} 
-                />
-              </div>
-            </>
+              <FinancialSummaryCard 
+                title="INCOME" 
+                amount={financialData.income}
+                transactions={financialData.incomeTransactions} 
+              />
+              
+              <FinancialSummaryCard 
+                title="EXPENSES" 
+                amount={financialData.expenses}
+                transactions={financialData.expenseTransactions} 
+              />
+            </div>
           )}
           
           {/* Bottom Section: Budget Chart and AI Assistant */}
@@ -91,16 +65,14 @@ function DashboardContent() {
             </div>
           </div>
           
-          {/* AI Insights Section - Placed before Transaction History for better visibility */}
-          <div className="mb-6">
-            <AIInsights isBlurred={!hasUploadedStatement} />
-          </div>
-          
           {/* Transaction History Section */}
           <TransactionHistory 
             transactions={financialData.transactions} 
             isBlurred={!hasUploadedStatement} 
           />
+          
+          {/* AI Insights Section */}
+          {/* <AIInsights isBlurred={!hasUploadedStatement} /> */}
         </div>
       </div>
     </div>
@@ -130,7 +102,6 @@ export default function DashboardPage() {
   return (
     <BankStatementProvider>
       <DashboardContent />
-      <Toaster />
     </BankStatementProvider>
   );
 }

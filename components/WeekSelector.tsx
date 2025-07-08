@@ -38,7 +38,7 @@ export default function WeekSelector({
     endDay.setDate(startDay.getDate() + 6);
 
     // Format dates as DD/MM
-    const formatDate = (date: Date) => `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+    const formatDate = (date: Date) => `${date.getDate()}/${date.getMonth() + 1}`;
 
     return `${formatDate(startDay)}-${formatDate(endDay)}`;
   };

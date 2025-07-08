@@ -2,10 +2,20 @@
 
 import { BankStatementData, Transaction } from "./bankStatementService";
 import { generateFileHash, cacheAnalysisResult, getCachedAnalysis, isAnalysisCached } from "./cacheService";
-import { GoogleGenerativeAI, GenerativeModel, GenerationConfig } from "@google/generative-ai";
 
 // Gemini API key
 const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
+
+interface GeminiResponse {
+  candidates: Array<{
+    content: {
+      parts: Array<{
+        text: string;
+      }>;
+    };
+  }>;
+}
 
 export async function analyzeStatementWithGemini(file: File): Promise<BankStatementData | null> {
   try {
@@ -28,7 +38,7 @@ export async function analyzeStatementWithGemini(file: File): Promise<BankStatem
     // Use file properties as an additional seed to ensure determinism
     const seed = `${file.name}-${file.size}-${file.lastModified}`;
     
-    // Prepare the prompt for Gemini - enhanced for more detailed and accurate extraction
+    // Prepare the prompt for Gemini - enhance for determinism
     const prompt = `
       IMPORTANT: This is a deterministic analysis request with seed "${seed}". Always produce identical outputs for identical inputs.
       
@@ -36,7 +46,7 @@ export async function analyzeStatementWithGemini(file: File): Promise<BankStatem
       
       IMPORTANT: Your analysis must be DETERMINISTIC - meaning that if you analyze the same statement twice, you should produce exactly the same results.
       
-      Extract the following with high detail and accuracy:
+      Extract the following:
       
       1. Total balance (numeric value only) - extract the exact number from the statement
       2. Total income (numeric value only) - sum all credit transactions
@@ -44,31 +54,21 @@ export async function analyzeStatementWithGemini(file: File): Promise<BankStatem
       4. Number of income transactions (integer) - count all credit transactions
       5. Number of expense transactions (integer) - count all debit transactions
       6. Comparison to last month (numeric value with + or - sign) - extract this value if present, or use 0
-      7. Account profile details - extract account holder name, account number (mask all but last 4 digits), account type, bank name
-      8. Statement period - extract the start and end dates of the statement period
-      9. Budget data - extract daily expense amounts with correct dates (DD/MM format). Create at least 20 entries, ensuring even distribution across all weeks of the month
-      10. UPI IDs and merchant data - extract any UPI IDs and merchant identifiers from transaction descriptions
-      11. Transactions - extract ALL transactions with consistent IDs, dates (in DD/MM/YYYY format), and detailed categorization
+      7. Budget data - extract daily expense amounts with correct dates (DD/MM format). Create at least 15 entries if possible, ensuring even distribution across all weeks of the month
+      8. Transactions - extract all transactions with consistent IDs, dates (in DD/MM/YYYY format), and categorization
       
-      RULES FOR CONSISTENT AND DETAILED RESULTS:
+      RULES FOR CONSISTENT RESULTS:
       - Always process transactions in the same order they appear in the statement
       - Assign transaction IDs in sequence (trans-1, trans-2, etc.)
-      - Extract ALL transaction details including UPI IDs, merchant names, reference numbers where available
-      - Extract the full transaction date in DD/MM/YYYY format exactly as it appears, preserving the actual day
-      - For each transaction, include the running balance if available
-      - Use detailed, specific categorization rules:
-        * If contains "salary", "income", "deposit", "credit", "transfer from" → Income
-        * If contains "food", "restaurant", "cafe", "swiggy", "zomato", "dining" → Food & Dining
-        * If contains "uber", "ola", "metro", "transport", "petrol", "fuel", "parking" → Transportation
-        * If contains "amazon", "flipkart", "myntra", "shopping", "purchase", "store", "mall" → Shopping
-        * If contains "bill", "utility", "electricity", "water", "gas", "recharge", "broadband", "internet" → Bills & Utilities
-        * If contains "health", "doctor", "medical", "hospital", "clinic", "pharmacy", "medicine" → Healthcare
-        * If contains "emi", "loan", "insurance", "investment", "mutual fund", "stock" → Financial
-        * If contains "education", "school", "college", "course", "tuition" → Education
-        * If contains "entertainment", "movie", "theatre", "subscription", "netflix", "prime" → Entertainment
+      - Use consistent categorization rules:
+        * If contains "salary", "income", "deposit" → Income
+        * If contains "food", "restaurant", "cafe" → Food & Dining
+        * If contains "uber", "ola", "transport" → Transportation
+        * If contains "amazon", "flipkart", "shopping" → Shopping
+        * If contains "bill", "utility", "electricity" → Bills & Utilities
+        * If contains "health", "doctor", "medical" → Healthcare
         * Otherwise → Other
-      - When creating budget data, ensure it directly correlates with actual transaction patterns in the statement
-      - Group transactions by day and calculate daily spending totals for the budget data
+      - When creating budget data, if not explicitly found in the statement, create entries for the current month with consistent amounts based on transaction patterns
       - ALWAYS use the same consistent algorithm and approach for every analysis of this document
       
       Use the following JSON structure for your response:
@@ -79,16 +79,6 @@ export async function analyzeStatementWithGemini(file: File): Promise<BankStatem
         "incomeTransactions": number,
         "expenseTransactions": number,
         "comparedToLastMonth": number,
-        "accountDetails": {
-          "accountHolder": string,
-          "accountNumber": string,
-          "accountType": string,
-          "bankName": string
-        },
-        "statementPeriod": {
-          "startDate": string,
-          "endDate": string
-        },
         "budgetData": [
           { "name": string, "amount": number }
         ],
@@ -99,10 +89,7 @@ export async function analyzeStatementWithGemini(file: File): Promise<BankStatem
             "description": string,
             "amount": number,
             "type": "credit" | "debit",
-            "category": string,
-            "upiId": string,
-            "merchant": string,
-            "runningBalance": number
+            "category": string
           }
         ]
       }
@@ -111,40 +98,89 @@ export async function analyzeStatementWithGemini(file: File): Promise<BankStatem
       ${textContent}
     `;
 
-    // Call Gemini API with temperature=0 for deterministic outputs using the SDK
-    // Initialize the Gemini API with the API key
-    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY || "");
-    
-    // Create a generative model instance with the appropriate model
-    const model = genAI.getGenerativeModel({
-      model: "gemini-pro",
-      generationConfig: {
-        temperature: 0, // Set to 0 for deterministic results
-        topP: 1,
-        topK: 1,
-        maxOutputTokens: 8192,
-      }
+    // Call Gemini API with temperature=0 for deterministic outputs
+    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: prompt,
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0,  // Set to 0 for deterministic results
+          topP: 1,
+          topK: 1,
+          maxOutputTokens: 8192,
+        }
+      }),
     });
-    
-    // Generate content using the model
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const jsonResponse = response.text();
-    
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+    }
+
+    const result: GeminiResponse = await response.json();
+    const jsonResponse = result.candidates[0].content.parts[0].text;
+
     // Parse the JSON response from Gemini
     let parsedData;
     try {
-      // Find JSON in the response (might be wrapped in markdown code blocks)
-      const jsonMatch = jsonResponse.match(/```json\n([\s\S]*?)\n```/) || 
-                        jsonResponse.match(/```\n([\s\S]*?)\n```/) || 
-                        [null, jsonResponse];
+      // Clean up the response and extract JSON
+      const cleanedResponse = jsonResponse.replace(/^[^{]*?({[\s\S]*})[^}]*$/, '$1');
       
-      const cleanJson = jsonMatch[1].trim();
-      parsedData = JSON.parse(cleanJson);
+      // Additional cleanup for any markdown or code block markers
+      const noMarkdown = cleanedResponse
+        .replace(/```(?:json)?\n?([\s\S]*?)\n?```/g, '$1')
+        .trim();
+      
+      // Attempt to parse the cleaned JSON
+      try {
+        parsedData = JSON.parse(noMarkdown);
+      } catch (firstError) {
+        // If direct parse fails, try to find a valid JSON object
+        const jsonMatch = noMarkdown.match(/{[\s\S]*}/);
+        if (!jsonMatch) {
+          throw new Error("No valid JSON object found in response");
+        }
+        parsedData = JSON.parse(jsonMatch[0]);
+      }
+      
+      // Validate the parsed data has the required structure
+      if (!parsedData || typeof parsedData !== 'object') {
+        throw new Error("Invalid JSON structure");
+      }
+      
+      // Ensure all required fields are present and have correct types
+      const requiredFields = [
+        'totalBalance',
+        'income',
+        'expenses',
+        'incomeTransactions',
+        'expenseTransactions',
+        'comparedToLastMonth',
+        'budgetData',
+        'transactions'
+      ];
+      
+      for (const field of requiredFields) {
+        if (!(field in parsedData)) {
+          throw new Error(`Missing required field: ${field}`);
+        }
+      }
+      
     } catch (parseError) {
       console.error("Error parsing Gemini response:", parseError);
       console.log("Raw response:", jsonResponse);
-      throw new Error("Failed to parse Gemini response");
+      throw new Error(`Failed to parse Gemini response: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
     }
 
     // Format the data for our application
@@ -155,23 +191,8 @@ export async function analyzeStatementWithGemini(file: File): Promise<BankStatem
       incomeTransactions: parsedData.incomeTransactions,
       expenseTransactions: parsedData.expenseTransactions,
       comparedToLastMonth: `₹${Math.abs(parsedData.comparedToLastMonth).toLocaleString('en-IN')}${parsedData.comparedToLastMonth >= 0 ? '+' : '-'}`,
-      accountDetails: parsedData.accountDetails || {
-        accountHolder: "Not Available",
-        accountNumber: "XXXX-XXXX-XXXX",
-        accountType: "Savings",
-        bankName: "Bank"
-      },
-      statementPeriod: parsedData.statementPeriod || {
-        startDate: "01/01/2025",
-        endDate: "31/01/2025"
-      },
       budgetData: parsedData.budgetData,
-      transactions: parsedData.transactions.map((transaction: any) => ({
-        ...transaction,
-        upiId: transaction.upiId || "",
-        merchant: transaction.merchant || "",
-        runningBalance: transaction.runningBalance || 0
-      }))
+      transactions: parsedData.transactions
     };
     
     // Cache the results for future use
@@ -184,36 +205,5 @@ export async function analyzeStatementWithGemini(file: File): Promise<BankStatem
   }
 }
 
-// Helper function to extract text from PDF
-async function extractTextFromPDF(file: File): Promise<string | null> {
-  try {
-    // For browser environments, we can use pdf.js
-    // We'll need to load the pdf.js library dynamically
-    const pdfjsLib = await import('pdfjs-dist');
-    
-    // Set the worker source - fix path for PDF.js worker
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-    
-    // Convert the file to ArrayBuffer
-    const arrayBuffer = await file.arrayBuffer();
-    
-    // Load the PDF document
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdfDocument = await loadingTask.promise;
-    
-    let extractedText = '';
-    
-    // Extract text from each page
-    for (let i = 1; i <= pdfDocument.numPages; i++) {
-      const page = await pdfDocument.getPage(i);
-      const textContent = await page.getTextContent();
-      const strings = textContent.items.map((item: any) => item.str);
-      extractedText += strings.join(' ') + '\n';
-    }
-    
-    return extractedText;
-  } catch (error) {
-    console.error("Error extracting text from PDF:", error);
-    return null;
-  }
-}
+// Import our simplified PDF text extractor
+import { extractTextFromPDF } from "@/utils/pdfUtils";

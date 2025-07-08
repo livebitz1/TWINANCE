@@ -2,7 +2,6 @@
 import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Inter } from "next/font/google";
-import Header from "@/components/Header";
 
 // Import Inter font
 const inter = Inter({
