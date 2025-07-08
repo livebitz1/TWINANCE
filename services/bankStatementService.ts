@@ -10,6 +10,10 @@ export interface Transaction {
   amount: number;
   type: "credit" | "debit";
   category: string;
+  referenceNumber?: string;
+  balanceAfter?: number;
+  merchant?: string;
+  upiId?: string;
 }
 
 export interface AccountDetails {
@@ -151,10 +155,9 @@ async function simulatePDFParsing(file: File): Promise<BankStatementData> {
   
   // Create budget data entries for each day of the month
   const budgetData = [];
-  for (let day = 1; day <= Math.min(monthDays, 28); day++) {
-    // Create more entries for days 1-28 to ensure coverage across all 4 weeks
+  for (let day = 1; day <= Math.min(monthDays, 31); day++) {
     // Use deterministic amounts based on the day and seed
-    const amount = Math.floor(deterministicRand(1000, 20000, day * 10));
+    const amount = Math.floor(deterministicRand(500, 15000, day * 10));
     
     // Format as DD/MM for consistency with BudgetChart component
     budgetData.push({
@@ -166,55 +169,98 @@ async function simulatePDFParsing(file: File): Promise<BankStatementData> {
   // Generate transactions with deterministic outputs and proper date distribution
   const categories = [
     "Income", "Food & Dining", "Transportation", 
-    "Shopping", "Bills & Utilities", "Healthcare", "Other"
+    "Shopping", "Bills & Utilities", "Healthcare", "UPI", "Transfer", "Other"
   ];
   
   const descriptions = [
     "Salary Credit", "Amazon Purchase", "Uber Ride",
     "Grocery Shopping", "Electricity Bill", "Restaurant Payment",
     "Monthly Rent", "Mobile Recharge", "Movie Tickets",
-    "Doctor Consultation", "Online Subscription", "Flight Booking"
+    "Doctor Consultation", "Online Subscription", "Flight Booking",
+    "UPI - GOOGLE PLAYSTORE", "UPI - SWIGGY", "UPI - PAYTM",
+    "NEFT Transfer", "IMPS Transfer", "ATM Withdrawal"
+  ];
+
+  const merchants = [
+    "Amazon", "Flipkart", "Swiggy", "Zomato", "Uber", "Ola",
+    "Google Play", "Netflix", "Spotify", "Paytm", "PhonePe",
+    "HDFC Bank", "SBI", "ICICI Bank", "Axis Bank"
+  ];
+
+  const upiIds = [
+    "merchant@paytm", "store@googlepay", "vendor@phonepe", 
+    "shop@amazonpay", "service@paytm", "business@upi"
   ];
   
   const transactions: Transaction[] = [];
-  const transactionCount = Math.floor(deterministicRand(25, 40, 7));
   
-  // Get current month information for transaction dates
-  const displayMonth = currentDate.getMonth() + 1; // 1-12
-  const displayYear = currentDate.getFullYear();
-  const totalDaysInMonth = new Date(displayYear, displayMonth, 0).getDate();
+  // Generate transactions for multiple months to enable comparison
+  const monthsToGenerate = 3; // Current and 2 previous months
   
-  // Generate transactions evenly distributed across all 4 weeks of the month
-  for (let i = 0; i < transactionCount; i++) {
-    // Ensure transactions are spread across all weeks for testing the week selector
-    // Week 1: days 1-7, Week 2: days 8-14, Week 3: days 15-21, Week 4: days 22-end
-    const weekBias = Math.floor(i / (transactionCount / 4)); // 0-3
-    const minDay = weekBias * 7 + 1;
-    const maxDay = Math.min((weekBias + 1) * 7, totalDaysInMonth);
+  for (let monthOffset = 0; monthOffset < monthsToGenerate; monthOffset++) {
+    const targetDate = new Date(year, month - monthOffset, 1);
+    const targetMonth = targetDate.getMonth() + 1;
+    const targetYear = targetDate.getFullYear();
+    const daysInTargetMonth = new Date(targetYear, targetMonth, 0).getDate();
     
-    const day = Math.floor(deterministicRand(minDay, maxDay, 400 + i));
+    const monthlyTransactionCount = Math.floor(deterministicRand(20, 35, 1000 + monthOffset));
     
-    const isCredit = deterministicRand(0, 1, 100 + i) > 0.7;
-    const amount = isCredit 
-      ? Math.floor(deterministicRand(5000, 20000, 200 + i)) 
-      : Math.floor(deterministicRand(200, 3000, 300 + i));
+    // Track running balance for balance after transaction
+    let runningBalance = totalBalance - (monthOffset * 10000); // Simulate historical balance
     
-    // Create a proper date string in DD/MM/YYYY format
-    const transactionDate = `${day.toString().padStart(2, '0')}/${displayMonth.toString().padStart(2, '0')}/${displayYear}`;
-    
-    const descriptionIndex = Math.floor(deterministicRand(0, descriptions.length, 500 + i));
-    const categoryIndex = isCredit ? 0 : Math.floor(deterministicRand(1, categories.length, 600 + i));
-    
-    transactions.push({
-      id: `trans-${i+1}`,
-      date: transactionDate,
-      description: descriptions[descriptionIndex],
-      amount: amount,
-      type: isCredit ? "credit" : "debit",
-      category: categories[categoryIndex]
-    });
+    // Generate transactions for this month
+    for (let i = 0; i < monthlyTransactionCount; i++) {
+      // Ensure transactions are spread across all weeks of the month
+      const weekBias = Math.floor(i / (monthlyTransactionCount / 4));
+      const minDay = Math.max(1, weekBias * 7 + 1);
+      const maxDay = Math.min((weekBias + 1) * 7, daysInTargetMonth);
+      
+      const day = Math.floor(deterministicRand(minDay, maxDay, 400 + monthOffset * 100 + i));
+      
+      const isCredit = deterministicRand(0, 1, 100 + monthOffset * 50 + i) > 0.75;
+      const amount = isCredit 
+        ? Math.floor(deterministicRand(5000, 25000, 200 + monthOffset * 50 + i)) 
+        : Math.floor(deterministicRand(200, 4000, 300 + monthOffset * 50 + i));
+      
+      // Create proper date string in DD/MM/YYYY format
+      const transactionDate = `${day.toString().padStart(2, '0')}/${targetMonth.toString().padStart(2, '0')}/${targetYear}`;
+      
+      const descriptionIndex = Math.floor(deterministicRand(0, descriptions.length, 500 + monthOffset * 50 + i));
+      const categoryIndex = isCredit ? 0 : Math.floor(deterministicRand(1, categories.length, 600 + monthOffset * 50 + i));
+      const merchantIndex = Math.floor(deterministicRand(0, merchants.length, 700 + monthOffset * 50 + i));
+      const upiIndex = Math.floor(deterministicRand(0, upiIds.length, 800 + monthOffset * 50 + i));
+      
+      // Generate reference number (12 digits)
+      const referenceNumber = Math.floor(deterministicRand(100000000000, 999999999999, 900 + monthOffset * 50 + i)).toString();
+      
+      // Update running balance
+      if (isCredit) {
+        runningBalance += amount;
+      } else {
+        runningBalance -= amount;
+      }
+      
+      const transaction: Transaction = {
+        id: `trans-${monthOffset}-${i+1}`,
+        date: transactionDate,
+        description: descriptions[descriptionIndex],
+        amount: amount,
+        type: isCredit ? "credit" : "debit",
+        category: categories[categoryIndex],
+        referenceNumber: referenceNumber,
+        balanceAfter: runningBalance,
+        merchant: merchants[merchantIndex],
+      };
+
+      // Add UPI ID for UPI transactions
+      if (categories[categoryIndex] === "UPI" || descriptions[descriptionIndex].includes("UPI")) {
+        transaction.upiId = upiIds[upiIndex];
+      }
+      
+      transactions.push(transaction);
+    }
   }
-  
+
   // Sort by date (newest first) - this sort should be deterministic 
   // since the input data is deterministic
   const sortedTransactions = transactions.sort((a, b) => {

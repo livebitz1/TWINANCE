@@ -89,7 +89,11 @@ export async function analyzeStatementWithGemini(file: File): Promise<BankStatem
             "description": string,
             "amount": number,
             "type": "credit" | "debit",
-            "category": string
+            "category": string,
+            "referenceNumber": string,
+            "balanceAfter": number,
+            "merchant": string,
+            "upiId": string
           }
         ]
       }
