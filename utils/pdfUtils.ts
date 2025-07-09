@@ -32,7 +32,22 @@ export async function extractTextFromPDF(file: File): Promise<string | null> {
     console.log("pdfjs-dist method failed:", error);
   }
 
-  // Try method 3: Throw error - no fallback data generation
+  // Try method 3: OCR fallback for image-based PDFs (client-side only)
+  if (typeof window !== 'undefined') {
+    try {
+      console.log("Attempting OCR fallback method...");
+      const { extractTextWithOCR } = await import('./ocrUtils');
+      const result = await extractTextWithOCR(file);
+      if (result && result.trim().length > 0) {
+        console.log(`✅ OCR fallback successful: ${result.length} characters`);
+        return result;
+      }
+    } catch (error) {
+      console.log("OCR fallback method failed:", error);
+    }
+  }
+
+  // Try method 4: Throw error - no fallback data generation
   console.log("All PDF text extraction methods failed");
   throw new Error('All PDF extraction methods failed - cannot extract text from this PDF file. Please ensure the PDF contains readable text and is not password-protected or corrupted.');
 }
