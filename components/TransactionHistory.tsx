@@ -20,7 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Transaction } from "@/services/bankStatementService";
 import { explainTransaction } from "@/services/transactionExplanationService";
-import { 
+import {
   Search, 
   Calendar, 
   Filter, 
@@ -31,7 +31,6 @@ import {
   Bot,
   Loader2,
   CreditCard,
-  Banknote,
   TrendingUp,
   TrendingDown
 } from "lucide-react";
@@ -67,7 +66,7 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
 
   const uniqueMonths = useMemo(() => {
     const months = [...new Set(transactions.map(t => {
-      const [day, month, year] = t.date.split('/');
+      const [, month, year] = t.date.split('/');
       return `${month}/${year}`;
     }))];
     return months.sort((a, b) => {
@@ -80,7 +79,7 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
 
   // Filter and sort transactions
   const filteredAndSortedTransactions = useMemo(() => {
-    let filtered = transactions.filter(transaction => {
+    const filtered = transactions.filter(transaction => {
       const matchesSearch = transaction.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
                            transaction.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
                            (transaction.merchant && transaction.merchant.toLowerCase().includes(searchTerm.toLowerCase())) ||
@@ -91,7 +90,7 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
       
       let matchesMonth = true;
       if (monthFilter !== "all") {
-        const [day, month, year] = transaction.date.split('/');
+        const [, month, year] = transaction.date.split('/');
         const transactionMonth = `${month}/${year}`;
         matchesMonth = transactionMonth === monthFilter;
       }
@@ -101,7 +100,7 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
 
     // Sort transactions
     filtered.sort((a, b) => {
-      let aValue: any, bValue: any;
+      let aValue: string | number | Date, bValue: string | number | Date;
       
       switch (sortField) {
         case 'date':
@@ -155,7 +154,7 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
     try {
       const explanation = await explainTransaction(transaction);
       setExplanation(explanation);
-    } catch (error) {
+    } catch {
       setExplanation("Sorry, I couldn't analyze this transaction at the moment. Please try again later.");
     } finally {
       setIsExplaining(false);
@@ -242,7 +241,7 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
                 />
               </div>
               
-              <Select value={typeFilter} onValueChange={(value: any) => setTypeFilter(value)}>
+              <Select value={typeFilter} onValueChange={(value: "all" | "credit" | "debit") => setTypeFilter(value)}>
                 <SelectTrigger className="bg-background/10 border-border/30">
                   <SelectValue placeholder="Filter by type" />
                 </SelectTrigger>

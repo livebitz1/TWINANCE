@@ -1,8 +1,7 @@
 "use client";
 
-import React, { createContext, useState, useContext, useEffect } from "react";
+import React, { createContext, useState, useContext } from "react";
 import { BankStatementData, processBankStatement, Transaction } from "@/services/bankStatementService";
-import { getAllCachedHashes, getCachedAnalysis } from "@/services/cacheService";
 
 interface BankStatementContextType {
   hasUploadedStatement: boolean;
@@ -12,9 +11,6 @@ interface BankStatementContextType {
   isProcessing: boolean;
   setIsProcessing: (value: boolean) => void;
   processFile: (file: File) => Promise<boolean>;
-  currentFileHash: string | null;
-  setCurrentFileHash: (hash: string | null) => void;
-  cachedFiles: string[];
 }
 
 // Empty initial state instead of mock data
@@ -35,19 +31,6 @@ export function BankStatementProvider({ children }: { children: React.ReactNode 
   const [hasUploadedStatement, setHasUploadedStatement] = useState(false);
   const [financialData, setFinancialData] = useState<BankStatementData>(initialFinancialData);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [currentFileHash, setCurrentFileHash] = useState<string | null>(null);
-  const [cachedFiles, setCachedFiles] = useState<string[]>([]);
-  
-  // Load cached files on initialization
-  useEffect(() => {
-    const hashes = getAllCachedHashes();
-    setCachedFiles(hashes);
-    
-    // If we have cached files, log them for debugging
-    if (hashes.length > 0) {
-      console.log(`Found ${hashes.length} cached file analyses`);
-    }
-  }, []);
 
   // Function to process a bank statement file
   const processFile = async (file: File): Promise<boolean> => {
@@ -55,29 +38,40 @@ export function BankStatementProvider({ children }: { children: React.ReactNode 
       setIsProcessing(true);
       
       // Debug log file processing
-      console.log(`Processing file: ${file.name} (${file.size} bytes)`);
+      console.log(`🔄 Processing file: ${file.name} (${file.size} bytes)`);
+      console.log("🚨 REAL DATA ONLY - No mock data will be generated");
       
-      // Process the bank statement file
+      // Process the bank statement file - ONLY accept real data
       const result = await processBankStatement(file);
       
       if (result) {
-        // Use real data from the API
+        // Use ONLY real data from the PDF
+        console.log("✅ Real data extracted successfully from PDF");
+        console.log(`📊 Transactions found: ${result.transactions.length}`);
+        console.log(`💰 Total Balance: ${result.totalBalance}`);
+        console.log(`📅 Period: ${result.statementPeriod?.startDate} to ${result.statementPeriod?.endDate}`);
+        
         setFinancialData(result);
         setHasUploadedStatement(true);
-        
-        // Update cached files list
-        const hashes = getAllCachedHashes();
-        setCachedFiles(hashes);
-        
         setIsProcessing(false);
         return true;
       }
       
+      // If no result, this means extraction failed
+      console.error("❌ EXTRACTION FAILED: No real data could be extracted from PDF");
       setIsProcessing(false);
+      
+      // Do NOT set hasUploadedStatement to true - show error state
       return false;
+      
     } catch (error) {
-      console.error("Error processing file:", error);
+      console.error("❌ PROCESSING FAILED:", error);
       setIsProcessing(false);
+      
+      // Do NOT generate any fallback data - show error state
+      console.error("❌ NO fallback data will be generated");
+      console.error("❌ Dashboard will show empty state until valid PDF is uploaded");
+      
       return false;
     }
   };
@@ -91,10 +85,7 @@ export function BankStatementProvider({ children }: { children: React.ReactNode 
         setFinancialData,
         isProcessing,
         setIsProcessing,
-        processFile,
-        currentFileHash,
-        setCurrentFileHash,
-        cachedFiles
+        processFile
       }}
     >
       {children}

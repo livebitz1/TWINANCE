@@ -17,88 +17,90 @@ function DashboardContent() {
   const { hasUploadedStatement, setHasUploadedStatement, financialData } = useBankStatement();
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Fixed top bar with padding */}
-      <div className="sticky top-0 z-10 bg-black/70 backdrop-blur-md px-6 py-4 border-b border-border/30 shadow-md">
-        <div className="max-w-[1400px] mx-auto">
-          <DashboardNavbar />
+    <div className="min-h-screen bg-background">
+      <div className="h-full flex flex-col">
+        {/* Fixed top bar with padding */}
+        <div className="sticky top-0 z-10 bg-background/70 backdrop-blur-md px-6 py-4 border-b border-border/30 shadow-md">
+          <div className="max-w-[1400px] mx-auto">
+            <DashboardNavbar />
+          </div>
         </div>
-      </div>
-      
-      {/* Scrollable content area with proper padding */}
-      <div className="flex-1 overflow-y-auto py-6">
-        <div className="max-w-[1400px] mx-auto px-4 sm:px-6">
-          {/* Bank Statement Upload or Financial Summary Cards */}
-          {!hasUploadedStatement ? (
-            <div className="my-8">
-              <BankStatementUpload onUploadSuccess={() => setHasUploadedStatement(true)} />
-            </div>
-          ) : (
-            <>
-              {/* Account Info Banner */}
-              {financialData.accountDetails && financialData.statementPeriod && (
-                <div className="bg-background/10 backdrop-blur-sm border border-border/30 rounded-lg p-4 mb-6">
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div>
-                      <p className="text-sm text-muted-foreground">Account Holder</p>
-                      <p className="font-medium">{financialData.accountDetails.accountHolder}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground">Account Number</p>
-                      <p className="font-medium">{financialData.accountDetails.accountNumber}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground">Statement Period</p>
-                      <p className="font-medium">
-                        {financialData.statementPeriod.startDate} to {financialData.statementPeriod.endDate}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground">Account Type</p>
-                      <p className="font-medium">{financialData.accountDetails.accountType}</p>
+        
+        {/* Scrollable content area with proper padding */}
+        <div className="flex-1 overflow-y-auto py-6 bg-background">
+          <div className="max-w-[1400px] mx-auto px-4 sm:px-6">
+            {/* Bank Statement Upload or Financial Summary Cards */}
+            {!hasUploadedStatement ? (
+              <div className="my-8">
+                <BankStatementUpload onUploadSuccess={() => setHasUploadedStatement(true)} />
+              </div>
+            ) : (
+              <>
+                {/* Account Info Banner */}
+                {financialData.accountDetails && financialData.statementPeriod && (
+                  <div className="bg-card/10 backdrop-blur-sm border border-border/30 rounded-lg p-4 mb-6">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div>
+                        <p className="text-sm text-muted-foreground">Account Holder</p>
+                        <p className="font-medium">{financialData.accountDetails.accountHolder}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Account Number</p>
+                        <p className="font-medium">{financialData.accountDetails.accountNumber}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Statement Period</p>
+                        <p className="font-medium">
+                          {financialData.statementPeriod.startDate} to {financialData.statementPeriod.endDate}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Account Type</p>
+                        <p className="font-medium">{financialData.accountDetails.accountType}</p>
+                      </div>
                     </div>
                   </div>
+                )}
+
+                {/* Financial Summary Cards Grid */}
+                <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 mb-6">
+                  <FinancialSummaryCard
+                    title="Total Balance"
+                    amount={financialData.totalBalance}
+                    description="Current account balance"
+                  />
+                  <FinancialSummaryCard
+                    title="Income"
+                    amount={financialData.income}
+                    description={`From ${financialData.incomeTransactions} transactions`}
+                  />
+                  <FinancialSummaryCard
+                    title="Expenses"
+                    amount={financialData.expenses}
+                    description={`From ${financialData.expenseTransactions} transactions`}
+                  />
                 </div>
-              )}
 
-              {/* Financial Summary Cards Grid */}
-              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 mb-6">
-                <FinancialSummaryCard
-                  title="Total Balance"
-                  amount={financialData.totalBalance}
-                  description="Current account balance"
+                {/* Charts and Insights Section */}
+                <div className="grid gap-6 lg:grid-cols-2">
+                  {/* Budget Chart */}
+                  <BudgetChart isBlurred={!hasUploadedStatement} />
+
+                  {/* AI Assistant */}
+                  <AIAssistant isBlurred={!hasUploadedStatement} />
+                </div>
+
+                {/* AI Insights - Temporarily disabled */}
+                {/* <AIInsights isBlurred={!hasUploadedStatement} /> */}
+
+                {/* Transaction History */}
+                <TransactionHistory
+                  transactions={financialData.transactions}
+                  isBlurred={!hasUploadedStatement}
                 />
-                <FinancialSummaryCard
-                  title="Income"
-                  amount={financialData.income}
-                  description={`From ${financialData.incomeTransactions} transactions`}
-                />
-                <FinancialSummaryCard
-                  title="Expenses"
-                  amount={financialData.expenses}
-                  description={`From ${financialData.expenseTransactions} transactions`}
-                />
-              </div>
-
-              {/* Charts and Insights Section */}
-              <div className="grid gap-6 lg:grid-cols-2">
-                {/* Budget Chart */}
-                <BudgetChart isBlurred={!hasUploadedStatement} />
-
-                {/* AI Assistant */}
-                <AIAssistant isBlurred={!hasUploadedStatement} />
-              </div>
-
-              {/* AI Insights - Temporarily disabled */}
-              {/* <AIInsights isBlurred={!hasUploadedStatement} /> */}
-
-              {/* Transaction History */}
-              <TransactionHistory
-                transactions={financialData.transactions}
-                isBlurred={!hasUploadedStatement}
-              />
-            </>
-          )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>

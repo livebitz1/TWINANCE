@@ -1,7 +1,9 @@
 "use client";
 
 import { analyzeStatementWithGemini } from "./geminiService";
-import { generateFileHash, cacheAnalysisResult, getCachedAnalysis, isAnalysisCached } from "./cacheService";
+import { extractTextFromPDF } from "@/utils/pdfUtils";
+import { ParsingDebugger } from "./parsingDebugger";
+import { CacheCleaner } from "@/utils/cacheCleaner";
 
 export interface Transaction {
   id: string;
@@ -20,6 +22,7 @@ export interface AccountDetails {
   accountHolder: string;
   accountNumber: string;
   accountType: string;
+  bankName: string;
 }
 
 export interface StatementPeriod {
@@ -42,50 +45,131 @@ export interface BankStatementData {
 
 export async function processBankStatement(file: File): Promise<BankStatementData | null> {
   try {
-    // Create a FormData instance to upload the file
-    const formData = new FormData();
-    formData.append("statement", file);
+    console.log(`🚀 Starting COMPREHENSIVE processing: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+    console.log("⏱️ Processing mode: COMPLETE EXTRACTION (may take time for large files)");
+    console.log("🔄 Processing fresh analysis (caching disabled for accuracy)");
     
-    // Check if we have this file in cache first
-    const fileHash = await generateFileHash(file);
-    if (isAnalysisCached(fileHash)) {
-      console.log("Using cached bank statement analysis");
-      return getCachedAnalysis(fileHash);
+    // Ensure no cached data interferes with fresh processing
+    CacheCleaner.clearAllCache();
+    
+    // Show extended loading for comprehensive processing
+    console.log("⏳ Initializing comprehensive extraction pipeline...");
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Extract text from PDF first with comprehensive methods
+    console.log("📄 Phase 1: COMPREHENSIVE PDF text extraction...");
+    console.log("   🔍 Using all available extraction methods");
+    console.log("   ⏱️ This may take time for large files - please wait");
+    
+    const extractedText = await extractTextFromPDF(file);
+    
+    if (!extractedText || extractedText.trim().length === 0) {
+      throw new Error("CRITICAL: No text could be extracted from the PDF file using any method");
     }
     
-    // Show loading state
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    console.log(`✅ Phase 1 Complete: Extracted ${extractedText.length} characters from PDF`);
+    console.log(`📊 Text quality: ${Math.round((extractedText.match(/[a-zA-Z0-9]/g)?.length || 0) / extractedText.length * 100)}% readable`);
     
-    // Use Gemini API to analyze the bank statement
-    const result = await analyzeStatementWithGemini(file);
+    // Enhanced debugging for large files
+    if (process.env.NODE_ENV === 'development') {
+      console.log("=== DEBUGGING COMPREHENSIVE EXTRACTION ===");
+      console.log(`File size: ${(file.size / 1024).toFixed(2)} KB`);
+      console.log(`Extracted text length: ${extractedText.length} characters`);
+      console.log(`Text preview (first 500 chars): ${extractedText.substring(0, 500)}`);
+      ParsingDebugger.debugParsing(extractedText);
+    }
+    
+    // Phase 2: Comprehensive AI Analysis
+    console.log("🤖 Phase 2: COMPREHENSIVE AI analysis...");
+    console.log("   🧠 Using advanced Gemini AI for complete data extraction");
+    console.log("   📊 Analyzing ALL transactions and account details");
+    console.log("   ⏱️ Large statements may require extended processing time");
+    
+    const result = await analyzeStatementWithGemini(extractedText, file);
     
     if (result) {
-      // Store in cache for future use
-      cacheAnalysisResult(fileHash, result);
+      console.log("✅ Phase 2 Complete: Successfully analyzed statement");
+      console.log(`📈 EXTRACTION RESULTS:`);
+      console.log(`   💳 Account: ${result.accountDetails?.accountHolder || 'Extracted'}`);
+      console.log(`   🏦 Bank: ${result.accountDetails?.bankName || 'Identified'}`);
+      console.log(`   📅 Period: ${result.statementPeriod?.startDate} to ${result.statementPeriod?.endDate}`);
+      console.log(`   💰 Transactions: ${result.transactions.length} found`);
+      console.log(`   📊 Total Income: ₹${result.income}`);
+      console.log(`   📉 Total Expenses: ₹${result.expenses}`);
+      console.log(`   💼 Balance: ₹${result.totalBalance}`);
+      
+      // Comprehensive validation for real data
+      if (result.transactions.length === 0) {
+        console.warn("⚠️ ANALYSIS WARNING: 0 transactions extracted");
+        console.warn("   This could mean:");
+        console.warn("   - PDF is image-based (scanned without text)");
+        console.warn("   - PDF is password-protected or corrupted");
+        console.warn("   - Text extraction failed to capture transaction data");
+        console.warn("   - Statement format is not recognized");
+        throw new Error("No transactions could be extracted from the PDF. The PDF may be image-based, password-protected, corrupted, or contain unreadable bank statement data.");
+      }
+      
+      // Additional validation for data quality
+      const hasValidTransactions = result.transactions.some(t => 
+        t.date && t.amount && t.description && t.description.length > 2
+      );
+      
+      if (!hasValidTransactions) {
+        console.error("🚨 CRITICAL: Extracted transactions appear invalid or incomplete");
+        throw new Error("Extracted transaction data appears invalid. Please ensure the PDF contains readable bank statement text.");
+      }
+      
+      // Validate extracted transactions in development
+      if (process.env.NODE_ENV === 'development') {
+        console.log("=== VALIDATING EXTRACTED REAL DATA ===");
+        ParsingDebugger.validateTransactions(result.transactions);
+        console.log("=== VALIDATION COMPLETE ===");
+      }
+      
+      console.log("🎉 SUCCESS: Comprehensive extraction completed with real data only");
       return result;
     }
     
-    // If Gemini analysis fails, fallback to the simulated data
-    const fallbackData = await simulatePDFParsing(file);
-    // Cache the fallback data too
-    cacheAnalysisResult(fileHash, fallbackData);
-    return fallbackData;
+    throw new Error("FAILURE: AI analysis failed to extract any meaningful data from the statement");
+    
   } catch (error) {
-    console.error("Error processing bank statement:", error);
-    // Fallback to simulated data if there's an error
-    const fileHash = await generateFileHash(file);
-    const fallbackData = await simulatePDFParsing(file);
-    cacheAnalysisResult(fileHash, fallbackData);
-    return fallbackData;
-  }
-}
+    console.error("🚨 COMPREHENSIVE PROCESSING FAILED:", error);
+    
+    // ABSOLUTELY NO FALLBACK DATA GENERATION
+    console.error("❌ CRITICAL FAILURE: Could not extract real data from PDF");
+    console.error("❌ All extraction and analysis methods failed");
+    console.error("❌ Cannot proceed without real data from the statement");
+    console.error("❌ NO mock, fallback, or generated data will be provided");
+    
+    // Provide detailed error information for debugging
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    const detailedError = `
+COMPREHENSIVE EXTRACTION FAILED
+═══════════════════════════════════════
 
-// Function to extract data from a PDF using PDF.js
-// This is a placeholder that would be implemented with actual PDF processing
-export async function extractDataFromPDF(file: File): Promise<any> {
-  // In a real application, you would use PDF.js or a similar library
-  // to extract text and data from the PDF
-  return null;
+File: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)
+Error: ${errorMessage}
+
+Possible reasons:
+• PDF is image-based (scanned document without text layer)
+• PDF is password-protected or encrypted
+• PDF file is corrupted or incomplete
+• PDF does not contain readable bank statement data
+• PDF format is not supported by extraction methods
+
+Solutions:
+• Try a different bank statement PDF
+• Ensure PDF has text layer (not just images)
+• Check if PDF is password-protected
+• Verify PDF contains actual bank transaction data
+• Contact support if issue persists
+
+REAL DATA REQUIREMENT: Only genuine extracted data will be displayed.
+No mock or fallback data will ever be generated.
+    `.trim();
+    
+    throw new Error(detailedError);
+  }
 }
 
 // Function to categorize transactions based on description
@@ -104,179 +188,11 @@ export function categorizeTransaction(description: string): string {
     return "Bills & Utilities";
   } else if (lowerDesc.includes("health") || lowerDesc.includes("doctor") || lowerDesc.includes("medical")) {
     return "Healthcare";
+  } else if (lowerDesc.includes("upi")) {
+    return "UPI";
+  } else if (lowerDesc.includes("transfer") || lowerDesc.includes("neft") || lowerDesc.includes("imps")) {
+    return "Transfer";
   } else {
     return "Other";
   }
-}
-
-// Temporary function to simulate parsing a PDF and extracting financial data
-// This should be replaced with a real API call in production
-async function simulatePDFParsing(file: File): Promise<BankStatementData> {
-  // In production, this would be actual data extracted from the PDF
-  // For development, we're generating plausible sample data
-  
-  // Get file name for deterministic seeding
-  const fileName = file.name;
-  
-  // Create a stable, reproducible seed based on the filename
-  // This ensures that the same file always produces the same analysis
-  const createStableSeed = (input: string): number => {
-    let hash = 0;
-    for (let i = 0; i < input.length; i++) {
-      hash = ((hash << 5) - hash) + input.charCodeAt(i);
-      hash |= 0; // Convert to 32bit integer
-    }
-    return Math.abs(hash);
-  };
-  
-  const seed = createStableSeed(fileName);
-  console.log(`Fallback simulation using deterministic seed: ${seed} for file: ${fileName}`);
-  
-  // Deterministic pseudo-random number generator based on file name
-  const deterministicRand = (min: number, max: number, offset: number = 0) => {
-    // Use a mathematical function that will always produce the same output for the same input
-    const x = Math.sin(seed + offset) * 10000;
-    return min + Math.abs(x - Math.floor(x)) * (max - min);
-  };
-  
-  // Generate completely deterministic financial data based on the file name
-  const totalBalance = Math.floor(deterministicRand(50000, 200000, 1));
-  const income = Math.floor(deterministicRand(30000, 70000, 2));
-  const expenses = Math.floor(deterministicRand(10000, 40000, 3));
-  const incomeTransactions = Math.floor(deterministicRand(3, 10, 4));
-  const expenseTransactions = Math.floor(deterministicRand(8, 20, 5));
-  const comparedToLastMonth = Math.floor(deterministicRand(-5000, 15000, 6));
-  
-  // Generate budget data (daily expenses for chart) - deterministically
-  const currentDate = new Date();
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
-  const monthDays = new Date(year, month + 1, 0).getDate();
-  
-  // Create budget data entries for each day of the month
-  const budgetData = [];
-  for (let day = 1; day <= Math.min(monthDays, 31); day++) {
-    // Use deterministic amounts based on the day and seed
-    const amount = Math.floor(deterministicRand(500, 15000, day * 10));
-    
-    // Format as DD/MM for consistency with BudgetChart component
-    budgetData.push({
-      name: `${day}/${month + 1}`,
-      amount: amount
-    });
-  }
-  
-  // Generate transactions with deterministic outputs and proper date distribution
-  const categories = [
-    "Income", "Food & Dining", "Transportation", 
-    "Shopping", "Bills & Utilities", "Healthcare", "UPI", "Transfer", "Other"
-  ];
-  
-  const descriptions = [
-    "Salary Credit", "Amazon Purchase", "Uber Ride",
-    "Grocery Shopping", "Electricity Bill", "Restaurant Payment",
-    "Monthly Rent", "Mobile Recharge", "Movie Tickets",
-    "Doctor Consultation", "Online Subscription", "Flight Booking",
-    "UPI - GOOGLE PLAYSTORE", "UPI - SWIGGY", "UPI - PAYTM",
-    "NEFT Transfer", "IMPS Transfer", "ATM Withdrawal"
-  ];
-
-  const merchants = [
-    "Amazon", "Flipkart", "Swiggy", "Zomato", "Uber", "Ola",
-    "Google Play", "Netflix", "Spotify", "Paytm", "PhonePe",
-    "HDFC Bank", "SBI", "ICICI Bank", "Axis Bank"
-  ];
-
-  const upiIds = [
-    "merchant@paytm", "store@googlepay", "vendor@phonepe", 
-    "shop@amazonpay", "service@paytm", "business@upi"
-  ];
-  
-  const transactions: Transaction[] = [];
-  
-  // Generate transactions for multiple months to enable comparison
-  const monthsToGenerate = 3; // Current and 2 previous months
-  
-  for (let monthOffset = 0; monthOffset < monthsToGenerate; monthOffset++) {
-    const targetDate = new Date(year, month - monthOffset, 1);
-    const targetMonth = targetDate.getMonth() + 1;
-    const targetYear = targetDate.getFullYear();
-    const daysInTargetMonth = new Date(targetYear, targetMonth, 0).getDate();
-    
-    const monthlyTransactionCount = Math.floor(deterministicRand(20, 35, 1000 + monthOffset));
-    
-    // Track running balance for balance after transaction
-    let runningBalance = totalBalance - (monthOffset * 10000); // Simulate historical balance
-    
-    // Generate transactions for this month
-    for (let i = 0; i < monthlyTransactionCount; i++) {
-      // Ensure transactions are spread across all weeks of the month
-      const weekBias = Math.floor(i / (monthlyTransactionCount / 4));
-      const minDay = Math.max(1, weekBias * 7 + 1);
-      const maxDay = Math.min((weekBias + 1) * 7, daysInTargetMonth);
-      
-      const day = Math.floor(deterministicRand(minDay, maxDay, 400 + monthOffset * 100 + i));
-      
-      const isCredit = deterministicRand(0, 1, 100 + monthOffset * 50 + i) > 0.75;
-      const amount = isCredit 
-        ? Math.floor(deterministicRand(5000, 25000, 200 + monthOffset * 50 + i)) 
-        : Math.floor(deterministicRand(200, 4000, 300 + monthOffset * 50 + i));
-      
-      // Create proper date string in DD/MM/YYYY format
-      const transactionDate = `${day.toString().padStart(2, '0')}/${targetMonth.toString().padStart(2, '0')}/${targetYear}`;
-      
-      const descriptionIndex = Math.floor(deterministicRand(0, descriptions.length, 500 + monthOffset * 50 + i));
-      const categoryIndex = isCredit ? 0 : Math.floor(deterministicRand(1, categories.length, 600 + monthOffset * 50 + i));
-      const merchantIndex = Math.floor(deterministicRand(0, merchants.length, 700 + monthOffset * 50 + i));
-      const upiIndex = Math.floor(deterministicRand(0, upiIds.length, 800 + monthOffset * 50 + i));
-      
-      // Generate reference number (12 digits)
-      const referenceNumber = Math.floor(deterministicRand(100000000000, 999999999999, 900 + monthOffset * 50 + i)).toString();
-      
-      // Update running balance
-      if (isCredit) {
-        runningBalance += amount;
-      } else {
-        runningBalance -= amount;
-      }
-      
-      const transaction: Transaction = {
-        id: `trans-${monthOffset}-${i+1}`,
-        date: transactionDate,
-        description: descriptions[descriptionIndex],
-        amount: amount,
-        type: isCredit ? "credit" : "debit",
-        category: categories[categoryIndex],
-        referenceNumber: referenceNumber,
-        balanceAfter: runningBalance,
-        merchant: merchants[merchantIndex],
-      };
-
-      // Add UPI ID for UPI transactions
-      if (categories[categoryIndex] === "UPI" || descriptions[descriptionIndex].includes("UPI")) {
-        transaction.upiId = upiIds[upiIndex];
-      }
-      
-      transactions.push(transaction);
-    }
-  }
-
-  // Sort by date (newest first) - this sort should be deterministic 
-  // since the input data is deterministic
-  const sortedTransactions = transactions.sort((a, b) => {
-    const dateA = new Date(a.date.split('/').reverse().join('-'));
-    const dateB = new Date(b.date.split('/').reverse().join('-'));
-    return dateB.getTime() - dateA.getTime();
-  });
-  
-  return {
-    totalBalance: `₹${totalBalance.toLocaleString('en-IN')}`,
-    income: `₹${income.toLocaleString('en-IN')}`,
-    expenses: `₹${expenses.toLocaleString('en-IN')}`,
-    incomeTransactions,
-    expenseTransactions,
-    comparedToLastMonth: `₹${Math.abs(comparedToLastMonth).toLocaleString('en-IN')}${comparedToLastMonth >= 0 ? '+' : '-'}`,
-    budgetData,
-    transactions: sortedTransactions
-  };
 }
