@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { UserButton, SignInButton, useAuth } from "@clerk/nextjs";
+import { UserButton, SignInButton, useAuth, useUser } from "@clerk/nextjs";
 import { useState, useEffect } from "react";
 import { useBankStatement } from "@/contexts/BankStatementContext";
 
@@ -18,13 +18,12 @@ export default function DashboardNavbar() {
   return (
     <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
       <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-0">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center">
-            <span className="font-bold text-sm text-primary-foreground">T</span>
-          </div>
+        <div className="flex items-center gap-3">
+          <button onClick={() => window.location.href = '/'} className="focus:outline-none">
+            <img src="/twinance-logo.png" alt="Twinance Logo" className="w-24 h-24 object-contain rounded-2xl shadow-lg" />
+          </button>
           <h1 className="text-xl font-bold">Twinance</h1>
         </div>
-        
         <div className="sm:ml-6 mt-2 sm:mt-0">
           <Tabs defaultValue="this-month" className="w-auto">
             <TabsList className="bg-background/10 backdrop-blur-sm border border-border/30">
@@ -53,11 +52,11 @@ export default function DashboardNavbar() {
           </Tabs>
         </div>
       </div>
-      
       <div className="flex items-center gap-4 mt-3 sm:mt-0">
         {isClient && isSignedIn ? (
           <div className="flex items-center gap-3">
-            <span className="text-sm hidden sm:inline">User - Profile</span>
+            {/* Show user name next to profile avatar */}
+            <UserName />
             <div className="rounded-lg border border-border/30 p-1 px-1 bg-background/10 backdrop-blur-sm hover:bg-background/20 transition-colors">
               <UserButton 
                 afterSignOutUrl="/" 
@@ -72,11 +71,19 @@ export default function DashboardNavbar() {
         ) : (
           <SignInButton mode="modal">
             <button className="rounded-lg border border-border/30 p-2 px-4 bg-background/10 backdrop-blur-sm hover:bg-primary hover:text-primary-foreground transition-colors">
-              User - Profile
+              Sign In
             </button>
           </SignInButton>
         )}
       </div>
     </div>
   );
+
+function UserName() {
+  const { user } = useUser();
+  if (!user) return null;
+  return (
+    <span className="text-base font-semibold text-blue-300 mr-2">{user.fullName || user.username || (user.emailAddresses && user.emailAddresses[0]?.emailAddress)}</span>
+  );
+}
 }

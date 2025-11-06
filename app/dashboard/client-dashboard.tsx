@@ -17,6 +17,7 @@ function DashboardContent() {
   const { hasUploadedStatement, setHasUploadedStatement, financialData } = useBankStatement();
 
   return (
+    
     <div className="min-h-screen bg-background">
       <div className="h-full flex flex-col">
         {/* Fixed top bar with padding */}
