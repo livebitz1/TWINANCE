@@ -17,7 +17,6 @@
     "@radix-ui/react-tabs": "^1.1.12",
     "@radix-ui/react-toast": "^1.2.14",
     "autoprefixer": "^10.4.21",
-    "canvas": "^3.1.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "form-data": "^4.0.3",
@@ -39,7 +38,6 @@
   "devDependencies": {
     "@types/node": "^20.19.4",
     "@types/pdf-parse": "^1.1.5",
-    "@types/pdfjs-dist": "^2.10.377",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "9.30.1",
@@ -47,5 +45,8 @@
     "file-loader": "^6.2.0",
     "null-loader": "^4.0.1",
     "typescript": "^5"
+  },
+  "optionalDependencies": {
+    "canvas": "^3.2.0"
   }
 }

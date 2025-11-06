@@ -17,7 +17,16 @@ const nextConfig: NextConfig = {
         url: false,
         zlib: false,
         'pdf-parse': false, // Prevent pdf-parse from being bundled on client
+        'child_process': false,
+        'worker_threads': false,
       };
+
+      // Ignore canvas module on client side
+      config.plugins.push(
+        new (require('webpack')).IgnorePlugin({
+          resourceRegExp: /^canvas$/,
+        })
+      );
 
       // Handle PDF.js worker files
       config.module.rules.push({
@@ -33,7 +42,8 @@ const nextConfig: NextConfig = {
       config.externals = config.externals || [];
       if (Array.isArray(config.externals)) {
         config.externals.push({
-          'pdf-parse': 'commonjs pdf-parse'
+          'pdf-parse': 'commonjs pdf-parse',
+          'canvas': 'canvas'
         });
       }
     }

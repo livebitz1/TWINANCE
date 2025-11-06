@@ -1,7 +1,6 @@
 "use client";
 import { useState } from "react";
-import DashboardNavbar from "@/components/DashboardNavbar";
-import { BankStatementProvider } from "@/contexts/BankStatementContext";
+import Web3Navbar from "@/components/Web3Navbar";
 import Web3EnhancedDashboard from "@/components/Web3EnhancedDashboard";
 import { WalletData } from "@/types/web3";
 
@@ -134,37 +133,39 @@ export default function Web3Dashboard() {
   };
 
   return (
-    <BankStatementProvider>
-      <div className="min-h-screen bg-gradient-to-br from-background via-[#1a1a2e] to-[#23243a] flex flex-col relative overflow-hidden">
-        <DashboardNavbar />
-        <main className="flex flex-1 flex-col items-center justify-center px-4 py-12 z-10">
-          <div className="max-w-2xl w-full text-center">
-            <h1 className="text-4xl md:text-5xl font-extrabold text-white mb-6 tracking-tight">Web3 Dashboard</h1>
-            <p className="text-lg text-gray-400 mb-8">
-              Connect your Phantom wallet to view your Solana assets, transactions, and more using Helious.
-            </p>
-            {!walletAddress ? (
-              <button
-                className="bg-gradient-to-r from-blue-600 to-blue-400 text-white font-bold px-8 py-4 rounded-xl shadow-lg hover:scale-105 transition-transform text-lg mb-8 border border-blue-700/40"
-                onClick={connectPhantom}
-              >
-                Connect Phantom Wallet
-              </button>
-            ) : (
-              <div className="mb-6">
-                <span className="text-blue-300 font-semibold">Wallet: {walletAddress}</span>
-              </div>
-            )}
-            {loading && <div className="text-blue-400 font-semibold mb-4">Loading wallet data...</div>}
-            {error && <div className="text-red-400 font-semibold mb-4">{error}</div>}
-            {walletData && (
-              <div className="mt-8">
-                <Web3EnhancedDashboard walletAddress={walletAddress} walletData={walletData} />
-              </div>
-            )}
-          </div>
-        </main>
+    <div className="min-h-screen bg-gradient-to-br from-background via-[#1a1a2e] to-[#23243a] flex flex-col relative overflow-hidden">
+      <div className="sticky top-0 z-10 bg-background/70 backdrop-blur-md px-6 py-4 border-b border-border/30 shadow-md">
+        <div className="max-w-[1400px] mx-auto">
+          <Web3Navbar />
+        </div>
       </div>
-    </BankStatementProvider>
+      <main className="flex flex-1 flex-col items-center justify-center px-4 py-12 z-10">
+        <div className="max-w-2xl w-full text-center">
+          <h1 className="text-4xl md:text-5xl font-extrabold text-white mb-6 tracking-tight">Web3 Dashboard</h1>
+          <p className="text-lg text-gray-400 mb-8">
+            Connect your Phantom wallet to view your Solana assets, transactions, and more using Helious.
+          </p>
+          {!walletAddress ? (
+            <button
+              className="bg-gradient-to-r from-blue-600 to-blue-400 text-white font-bold px-8 py-4 rounded-xl shadow-lg hover:scale-105 transition-transform text-lg mb-8 border border-blue-700/40"
+              onClick={connectPhantom}
+            >
+              Connect Phantom Wallet
+            </button>
+          ) : (
+            <div className="mb-6">
+              <span className="text-blue-300 font-semibold">Wallet: {walletAddress}</span>
+            </div>
+          )}
+          {loading && <div className="text-blue-400 font-semibold mb-4">Loading wallet data...</div>}
+          {error && <div className="text-red-400 font-semibold mb-4">{error}</div>}
+          {walletData && (
+            <div className="mt-8">
+              <Web3EnhancedDashboard walletAddress={walletAddress} walletData={walletData} />
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
   );
 }
