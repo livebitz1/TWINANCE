@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { UploadCloud, FileText, Loader2, Bot, CheckCircle, AlertTriangle, Info, Shield, Lock, FileUp, FileCheck2, FileX2, Sparkles } from "lucide-react";
+import { Loader2, Bot, CheckCircle, AlertTriangle, Info, Shield, Lock, FileUp, FileCheck2, FileX2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -116,7 +116,7 @@ export default function BankStatementUpload({ onUploadSuccess }: BankStatementUp
           variant: "destructive"
         });
       }
-    } catch (error) {
+    } catch {
       setUploadStatus("error");
       setStatusMessage("An error occurred. Please try again.");
       toast({

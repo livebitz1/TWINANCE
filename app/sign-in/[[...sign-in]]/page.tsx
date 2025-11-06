@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { SignIn } from "@clerk/nextjs";
+import Link from "next/link";
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -107,12 +108,12 @@ export default function SignInPage() {
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span className="font-bold text-indigo-600">&#43;</span>
                 <span className="font-semibold">New here?</span>
-                <a
+                <Link
                   href="/sign-up"
                   className="text-indigo-600 font-bold hover:underline ml-1"
                 >
                   Create an account
-                </a>
+                </Link>
               </div>
             </div>
           </div>

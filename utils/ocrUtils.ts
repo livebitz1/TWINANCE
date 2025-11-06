@@ -6,7 +6,7 @@ export async function extractTextWithOCR(file: File): Promise<string> {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
-        const { data: { text } } = await Tesseract.recognize(reader.result as ArrayBuffer, 'eng', {
+        const { data: { text } } = await Tesseract.recognize(reader.result as string, 'eng', {
           logger: m => console.log(m)
         });
         resolve(text);
@@ -15,6 +15,6 @@ export async function extractTextWithOCR(file: File): Promise<string> {
       }
     };
     reader.onerror = reject;
-    reader.readAsArrayBuffer(file);
+    reader.readAsDataURL(file);
   });
 }

@@ -2,7 +2,7 @@
 
 
 import Link from "next/link";
-import { UserButton, useAuth, SignUpButton } from "@clerk/nextjs";
+import { UserButton, useAuth } from "@clerk/nextjs";
 import TermsCard from "./TermsCard";
 import PrivacyCard from "./PrivacyCard";
 import { useState } from "react";

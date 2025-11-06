@@ -16,11 +16,11 @@ export async function POST(req: NextRequest) {
     let extractedText = '';
     let method = '';
     try {
-      const pdfParse = require('pdf-parse');
-      const data = await pdfParse(buffer);
+      const pdfParse = await import('pdf-parse');
+      const data = await pdfParse.default(buffer);
       extractedText = data.text;
       method = 'pdf-parse';
-    } catch (e) {
+    } catch {
       // Fallback to custom extractor
       extractedText = await CustomPDFExtractor.extractText(buffer);
       method = 'custom';
