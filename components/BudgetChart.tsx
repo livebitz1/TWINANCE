@@ -292,7 +292,7 @@ export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
               { label: 'Month View', active: activeView === 'month', onClick: () => setActiveView('month') },
               { label: 'Balance', active: activeView === 'balance', onClick: () => setActiveView('balance') },
               { label: 'Compare', active: activeView === 'comparison', onClick: () => setActiveView('comparison'), icon: <ArrowUpDown className="h-4 w-4 mr-1" /> },
-            ].map((btn, idx) => (
+            ].map(btn => (
               <button
                 key={btn.label}
                 onClick={btn.onClick}

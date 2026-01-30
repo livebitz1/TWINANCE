@@ -3,6 +3,7 @@
 import React from "react";
 import { UserButton, SignInButton, useAuth } from "@clerk/nextjs";
 import { useState, useEffect } from "react";
+import Image from "next/image";
 
 export default function Web3Navbar() {
   const { isSignedIn } = useAuth();
@@ -16,10 +17,12 @@ export default function Web3Navbar() {
     <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
       <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-0">
         <div className="flex items-center gap-2">
-          <img
+          <Image
             src="/twinance-logo.png"
             alt="Twinance Logo"
             className="h-8 w-8 object-contain"
+            width={32}
+            height={32}
           />
           <span className="text-xl font-bold">Twinance</span>
         </div>
@@ -29,7 +32,7 @@ export default function Web3Navbar() {
         {isClient && (
           <>
             {isSignedIn ? (
-              <UserButton 
+              <UserButton
                 appearance={{
                   elements: {
                     userButtonAvatarBox: "w-8 h-8",

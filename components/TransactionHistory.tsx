@@ -23,7 +23,6 @@ import { explainTransaction } from "@/services/transactionExplanationService";
 import {
   Search, 
   Calendar, 
-  Filter, 
   ArrowUpDown, 
   ChevronLeft, 
   ChevronRight,
