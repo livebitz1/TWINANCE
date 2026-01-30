@@ -54,29 +54,48 @@ export interface BankStatementData {
 
 export async function extractTextFromPDF(file: File): Promise<string | null> {
   console.log(`Starting PDF extraction for file: ${file.name}`);
-  
-  // Try method 1: Server-side API (most reliable)
+
+  // Try method 1: Enhanced PDF.js (most reliable for client-side)
+  try {
+    console.log("Attempting pdfjs-dist method (primary)...");
+    const result = await extractWithPdfJs(file);
+    if (result && result.trim().length > 0) {
+      // Validate readability
+      const readableCharRegex = /[a-zA-Z0-9\s.,₹$]/g;
+      const readableChars = result.match(readableCharRegex);
+      const readabilityRatio = readableChars ? readableChars.length / result.length : 0;
+
+      if (readabilityRatio >= 0.3) {
+        console.log(`✅ pdfjs-dist successful: ${result.length} characters (${Math.round(readabilityRatio * 100)}% readable)`);
+        return result;
+      } else {
+        console.log(`⚠️ pdfjs-dist returned low-quality text (${Math.round(readabilityRatio * 100)}% readable)`);
+      }
+    }
+  } catch (error) {
+    console.log("pdfjs-dist method failed:", error);
+  }
+
+  // Try method 2: Server-side API (backup)
   try {
     console.log("Attempting server-side API method...");
     const result = await extractWithServerAPI(file);
     if (result && result.trim().length > 0) {
-      console.log(`✅ Server-side API successful: ${result.length} characters`);
-      return result;
+      // Validate readability
+      const readableCharRegex = /[a-zA-Z0-9\s.,₹$]/g;
+      const readableChars = result.match(readableCharRegex);
+      const readabilityRatio = readableChars ? readableChars.length / result.length : 0;
+
+      if (readabilityRatio >= 0.3) {
+        console.log(`✅ Server-side API successful: ${result.length} characters (${Math.round(readabilityRatio * 100)}% readable)`);
+        return result;
+      } else {
+        console.log(`⚠️ Server API returned low-quality text (${Math.round(readabilityRatio * 100)}% readable)`);
+        console.log(`Text preview: ${result.substring(0, 200)}`);
+      }
     }
   } catch (error) {
     console.log("Server-side API method failed:", error);
-  }
-
-  // Try method 2: Enhanced PDF.js (browser-compatible)
-  try {
-    console.log("Attempting pdfjs-dist method...");
-    const result = await extractWithPdfJs(file);
-    if (result && result.trim().length > 0) {
-      console.log(`✅ pdfjs-dist successful: ${result.length} characters`);
-      return result;
-    }
-  } catch (error) {
-    console.log("pdfjs-dist method failed:", error);
   }
 
   // Try method 3: OCR fallback for image-based PDFs (client-side only)
@@ -95,27 +114,28 @@ export async function extractTextFromPDF(file: File): Promise<string | null> {
   }
 
   // All methods failed
-  console.log("All PDF text extraction methods failed");
-  throw new Error('All PDF extraction methods failed - cannot extract text from this PDF file. Please ensure the PDF contains readable text and is not password-protected or corrupted.');
+  console.error("❌ All PDF text extraction methods failed");
+  throw new Error('All PDF extraction methods failed - cannot extract text from this PDF file. The PDF may be:\n• Image-based (scanned document without text layer)\n• Password-protected or encrypted\n• Corrupted or incomplete\n• Using an unsupported format\n\nPlease try:\n• A different bank statement PDF\n• Ensuring the PDF has a text layer (not just images)\n• Checking if the PDF is password-protected\n• Verifying the PDF file is not corrupted');
 }
+
 
 /**
  * Enhanced extraction with comprehensive bank statement parsing
  */
 export async function extractBankStatementData(file: File): Promise<BankStatementData> {
   console.log(`Starting comprehensive bank statement extraction for: ${file.name}`);
-  
+
   const startTime = Date.now();
-  
+
   // Extract raw text from PDF
   const rawText = await extractTextFromPDF(file);
-  
+
   if (!rawText) {
     throw new Error('Failed to extract text from PDF');
   }
 
   console.log(`Raw text extracted: ${rawText.length} characters`);
-  
+
   // Parse the extracted text into structured data
   const statementData: BankStatementData = {
     rawText,
@@ -140,13 +160,13 @@ export async function extractBankStatementData(file: File): Promise<BankStatemen
 
   // Calculate summary statistics
   statementData.summary = calculateSummary(statementData.transactions);
-  
+
   const extractionTime = Date.now() - startTime;
   console.log(`✅ Bank statement extraction completed in ${extractionTime}ms`);
   console.log(`Extracted ${statementData.transactions.length} transactions`);
   console.log(`Account: ${statementData.accountInfo.accountNumber || 'Unknown'}`);
   console.log(`Period: ${statementData.statementPeriod.startDate} to ${statementData.statementPeriod.endDate}`);
-  
+
   return statementData;
 }
 
@@ -363,25 +383,25 @@ function parseBalanceInfo(text: string): BankStatementData['balance'] {
  */
 function parseTransactions(text: string): BankStatementData['transactions'] {
   const transactions: BankStatementData['transactions'] = [];
-  
+
   // Split text into lines
   const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-  
+
   // Transaction line patterns - more comprehensive
   const transactionPatterns = [
     // Pattern 1: Date | Description | Debit | Credit | Balance
     /^(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\s+(.+?)\s+(?:(?:Rs\.?|INR|₹)?\s*([\d,]+\.?\d*))?(?:\s+(?:Rs\.?|INR|₹)?\s*([\d,]+\.?\d*))?(?:\s+(?:Rs\.?|INR|₹)?\s*([\d,]+\.?\d*))?/,
-    
+
     // Pattern 2: Date Description Amount (Debit/Credit indicator)
     /^(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\s+(.+?)\s+(?:Dr|Cr|Debit|Credit)?\s*(?:Rs\.?|INR|₹)?\s*([\d,]+\.?\d*)/i,
-    
+
     // Pattern 3: Date | Description | Amount | Dr/Cr | Balance
     /^(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\s+(.+?)\s+(?:Rs\.?|INR|₹)?\s*([\d,]+\.?\d*)\s+(Dr|Cr)/i,
   ];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    
+
     // Skip header lines
     if (isHeaderLine(line)) {
       continue;
@@ -390,7 +410,7 @@ function parseTransactions(text: string): BankStatementData['transactions'] {
     // Try to match transaction patterns
     for (const pattern of transactionPatterns) {
       const match = line.match(pattern);
-      
+
       if (match) {
         const transaction = parseTransactionLine(match, line);
         if (transaction) {
@@ -417,7 +437,7 @@ function parseTransactions(text: string): BankStatementData['transactions'] {
   });
 
   console.log(`Parsed ${transactions.length} transactions`);
-  
+
   return transactions;
 }
 
@@ -430,16 +450,16 @@ function isHeaderLine(line: string): boolean {
     'particulars', 'withdrawal', 'deposit', 'narration', 'value date',
     'chq', 'cheque', 'ref', 'reference', 'mode', 'type'
   ];
-  
+
   const lowerLine = line.toLowerCase();
   let keywordCount = 0;
-  
+
   for (const keyword of headerKeywords) {
     if (lowerLine.includes(keyword)) {
       keywordCount++;
     }
   }
-  
+
   // If line contains 2 or more header keywords, it's likely a header
   return keywordCount >= 2;
 }
@@ -462,7 +482,7 @@ function parseTransactionLine(match: RegExpMatchArray, fullLine: string): BankSt
 
     // Extract amounts - try to intelligently detect debit/credit
     const amounts = [match[3], match[4], match[5]].filter(Boolean);
-    
+
     if (amounts.length > 0) {
       // Check for Dr/Cr indicators
       const isDr = fullLine.match(/\bDr\b/i) !== null;
@@ -492,7 +512,7 @@ function parseTransactionLine(match: RegExpMatchArray, fullLine: string): BankSt
         // Likely debit and credit columns
         const amt1 = parseFloat(amounts[0].replace(/,/g, ''));
         const amt2 = parseFloat(amounts[1].replace(/,/g, ''));
-        
+
         if (amt1 > 0 && amt2 === 0) {
           transaction.debit = amt1;
         } else if (amt2 > 0 && amt1 === 0) {
@@ -534,7 +554,7 @@ function parseTransactionLine(match: RegExpMatchArray, fullLine: string): BankSt
 function parseMultiLineTransaction(lines: string[], startIndex: number): BankStatementData['transactions'][0] | null {
   const currentLine = lines[startIndex];
   const nextLine = lines[startIndex + 1] || '';
-  
+
   const dateMatch = currentLine.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/);
   if (!dateMatch) return null;
 
@@ -552,7 +572,7 @@ function parseMultiLineTransaction(lines: string[], startIndex: number): BankSta
   // Extract amounts from both lines
   const amountPattern = /(?:Rs\.?|INR|₹)?\s*([\d,]+\.?\d*)/g;
   const amounts: number[] = [];
-  
+
   let match;
   while ((match = amountPattern.exec(currentLine + ' ' + nextLine)) !== null) {
     amounts.push(parseFloat(match[1].replace(/,/g, '')));
@@ -657,7 +677,7 @@ function normalizeDate(dateStr: string): string | undefined {
 function extractAllDates(text: string): string[] {
   const dates: string[] = [];
   const datePattern = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/g;
-  
+
   let match;
   while ((match = datePattern.exec(text)) !== null) {
     const normalized = normalizeDate(match[1]);
@@ -675,11 +695,11 @@ function extractAllDates(text: string): string[] {
 function parseDateToTimestamp(dateStr: string): number {
   const parts = dateStr.split('/');
   if (parts.length !== 3) return 0;
-  
+
   const day = parseInt(parts[0]);
   const month = parseInt(parts[1]) - 1;
   const year = parseInt(parts[2]);
-  
+
   return new Date(year, month, day).getTime();
 }
 
@@ -715,7 +735,7 @@ async function extractWithPdfJs(file: File): Promise<string | null> {
   if (!pdfjsLib) {
     try {
       pdfjsLib = await import('pdfjs-dist/legacy/build/pdf');
-      
+
       if (typeof window !== 'undefined') {
         try {
           pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
@@ -738,8 +758,8 @@ async function extractWithPdfJs(file: File): Promise<string | null> {
   }
 
   const arrayBuffer = await file.arrayBuffer();
-  
-  const loadingTask = pdfjsLib.getDocument({ 
+
+  const loadingTask = pdfjsLib.getDocument({
     data: arrayBuffer,
     standardFontDataUrl: '/standard_fonts/',
     cMapUrl: '/cmaps/',
@@ -751,15 +771,15 @@ async function extractWithPdfJs(file: File): Promise<string | null> {
 
   const pdf = await loadingTask.promise;
   let extractedText = '';
-  
+
   console.log(`PDF has ${pdf.numPages} pages`);
-  
+
   // Enhanced text extraction with better spacing and line breaks
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     try {
       const page = await pdf.getPage(pageNum);
       const textContent = await page.getTextContent();
-      
+
       // Sort items by vertical position (y) then horizontal position (x)
       const items = textContent.items.sort((a: any, b: any) => {
         if (Math.abs(a.transform[5] - b.transform[5]) > 5) {
@@ -770,11 +790,11 @@ async function extractWithPdfJs(file: File): Promise<string | null> {
 
       let currentY = items[0]?.transform[5] || 0;
       let lineText = '';
-      
+
       for (const item of items) {
         if ('str' in item && item.str.trim()) {
           const itemY = item.transform[5];
-          
+
           // New line detected (vertical position changed significantly)
           if (Math.abs(currentY - itemY) > 5) {
             if (lineText.trim()) {
@@ -791,25 +811,25 @@ async function extractWithPdfJs(file: File): Promise<string | null> {
           }
         }
       }
-      
+
       // Add last line
       if (lineText.trim()) {
         extractedText += lineText.trim() + '\n';
       }
-      
+
       extractedText += '\n'; // Page separator
-      
+
       console.log(`Extracted text from page ${pageNum}: ${lineText.length} characters`);
     } catch (pageError) {
       console.error(`Error extracting text from page ${pageNum}:`, pageError);
     }
   }
-  
+
   console.log(`Total extracted text length: ${extractedText.length} characters`);
-  
+
   if (extractedText.trim().length === 0) {
     throw new Error('No text could be extracted from the PDF');
   }
-  
+
   return extractedText.trim();
 }
