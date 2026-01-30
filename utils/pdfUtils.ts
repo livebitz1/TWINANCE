@@ -34,6 +34,8 @@ export interface BankStatementData {
     balance?: number;
     referenceNumber?: string;
     mode?: string;
+    amount?: number;
+    type?: "credit" | "debit";
   }>;
   summary: {
     totalCredits?: number;
@@ -448,7 +450,7 @@ function isHeaderLine(line: string): boolean {
 function parseTransactionLine(match: RegExpMatchArray, fullLine: string): BankStatementData['transactions'][0] | null {
   try {
     const date = normalizeDate(match[1]);
-    if (!date) return null;
+    if (!date) return null; // Skip if date is invalid or empty
 
     const description = match[2]?.trim() || '';
     if (description.length < 3) return null;
@@ -470,11 +472,21 @@ function parseTransactionLine(match: RegExpMatchArray, fullLine: string): BankSt
         const amount = parseFloat(amounts[0].replace(/,/g, ''));
         if (isDr || description.match(/debit|withdraw|payment|transfer\s*to/i)) {
           transaction.debit = amount;
+          transaction.amount = amount;
+          transaction.type = "debit";
         } else if (isCr || description.match(/credit|deposit|transfer\s*from|salary|interest/i)) {
           transaction.credit = amount;
+          transaction.amount = amount;
+          transaction.type = "credit";
+        } else if (description.match(/deposit/i)) {
+          transaction.credit = amount;
+          transaction.amount = amount;
+          transaction.type = "credit";
         } else {
           // Default to debit if unclear
           transaction.debit = amount;
+          transaction.amount = amount;
+          transaction.type = "debit";
         }
       } else if (amounts.length === 2) {
         // Likely debit and credit columns
@@ -612,7 +624,7 @@ function normalizeDate(dateStr: string): string | undefined {
   if (!dateStr) return undefined;
 
   // Try DD/MM/YYYY or DD-MM-YYYY
-  let match = dateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  let match = dateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
   if (match) {
     const day = match[1].padStart(2, '0');
     const month = match[2].padStart(2, '0');

@@ -287,47 +287,32 @@ export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
           
           {/* View Selection Buttons */}
           <div className="flex flex-wrap gap-2">
-            <Button 
-              variant={activeView === 'week' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setActiveView('week')}
-              disabled={isBlurred}
-            >
-              Week View
-            </Button>
-            <Button 
-              variant={activeView === 'month' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setActiveView('month')}
-              disabled={isBlurred}
-            >
-              Month View
-            </Button>
-            <Button 
-              variant={activeView === 'balance' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setActiveView('balance')}
-              disabled={isBlurred}
-            >
-              Balance
-            </Button>
-            <Button 
-              variant={activeView === 'comparison' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setActiveView('comparison')}
-              disabled={isBlurred}
-            >
-              <ArrowUpDown className="h-4 w-4 mr-1" />
-              Compare
-            </Button>
-            <Button 
-              variant={activeView === 'category' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setActiveView('category')}
-              disabled={isBlurred}
-            >
-              Category
-            </Button>
+            {[
+              { label: 'Week View', active: activeView === 'week', onClick: () => setActiveView('week') },
+              { label: 'Month View', active: activeView === 'month', onClick: () => setActiveView('month') },
+              { label: 'Balance', active: activeView === 'balance', onClick: () => setActiveView('balance') },
+              { label: 'Compare', active: activeView === 'comparison', onClick: () => setActiveView('comparison'), icon: <ArrowUpDown className="h-4 w-4 mr-1" /> },
+            ].map((btn, idx) => (
+              <button
+                key={btn.label}
+                onClick={btn.onClick}
+                className={cn(
+                  "relative px-6 py-2 font-semibold rounded-xl border border-border/40 bg-background/20 text-white transition-all duration-300 overflow-hidden",
+                  btn.active ? "scale-105 shadow-lg z-10" : "hover:scale-105",
+                  "liquid-effect"
+                )}
+                style={{
+                  borderRadius: btn.active ? '2rem' : '1rem',
+                }}
+              >
+                <span className="relative z-10 flex items-center justify-center">
+                  {btn.icon}
+                  {btn.label}
+                </span>
+                {/* Liquid animation overlay */}
+                <span className="absolute inset-0 liquid-anim" />
+              </button>
+            ))}
           </div>
           
           {/* Month Selection */}

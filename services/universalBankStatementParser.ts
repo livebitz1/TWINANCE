@@ -127,7 +127,15 @@ export class UniversalBankStatementParser {
       }
       
       // Determine transaction type
-      const type = this.determineTransactionType(match[0], description);
+      let type = this.determineTransactionType(match[0], description);
+      // Fallback: If pattern is 'Date + Amount' and description contains 'Deposit' or 'Deposit Amt.' or 'Deposit Amount', treat as credit
+      if (patternName === 'Date + Amount' && /deposit( amt\.?| amount)?/i.test(description)) {
+        type = "credit";
+      }
+      // Fallback: If pattern is 'Date + Amount' and description contains 'CR' (case-insensitive), treat as credit
+      if (patternName === 'Date + Amount' && /\bcr\b/i.test(description)) {
+        type = "credit";
+      }
       
       // Generate transaction
       return {
@@ -169,7 +177,7 @@ export class UniversalBankStatementParser {
     // Credit indicators
     if (lowerText.includes('credit') || lowerText.includes('deposit') || 
         lowerText.includes('salary') || lowerText.includes('cr ') ||
-        lowerText.includes('inward')) {
+        lowerText.includes('inward') || lowerText.includes('Deposit Amt.') || lowerText.includes('Deposit Amount') || lowerText.includes('Chq./Ref.No.') && lowerText.match(/Deposit/i)) {
       return "credit";
     }
     

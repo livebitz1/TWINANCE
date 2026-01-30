@@ -293,3 +293,56 @@
   font-size: 0.75rem;
   font-weight: 500;
 }
+
+/* Fluid, color-pop liquid effect for BudgetChart buttons */
+.liquid-effect {
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+}
+.liquid-anim {
+  pointer-events: none;
+  z-index: 1;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(120deg, #3b82f6 0%, #8b5cf6 60%, #06b6d4 100%);
+  opacity: 0.22;
+  transform: scale(1.1);
+  transition: background 0.5s, border-radius 0.4s, transform 0.3s, opacity 0.3s;
+}
+button:hover .liquid-anim, .liquid-effect.scale-105 .liquid-anim {
+  background: linear-gradient(120deg, #06b6d4 0%, #3b82f6 50%, #8b5cf6 100%);
+  opacity: 0.55;
+  border-radius: 2rem;
+  transform: scale(1.18);
+  box-shadow: 0 0 32px 12px rgba(59,130,246,0.22), 0 0 48px 18px rgba(139,92,246,0.18);
+  animation: liquid-pop 0.7s cubic-bezier(.68,-0.55,.27,1.55);
+}
+@keyframes liquid-pop {
+  0% { opacity: 0.22; transform: scale(1.1); }
+  60% { opacity: 0.7; transform: scale(1.22); }
+  100% { opacity: 0.55; transform: scale(1.18); }
+}
+.liquid-effect::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background-image:
+    radial-gradient(circle, rgba(255,255,255,0.18) 0px, transparent 2px),
+    radial-gradient(circle, rgba(255,255,255,0.12) 0px, transparent 1.5px),
+    radial-gradient(circle, rgba(255,255,255,0.10) 0px, transparent 1px);
+  background-size: 40px 40px, 24px 24px, 12px 12px;
+  background-position:
+    10px 10px, 30px 24px, 18px 32px,
+    60px 18px, 80px 40px, 120px 12px,
+    160px 30px, 200px 20px, 240px 36px;
+  animation: sparkle-move 2.5s linear infinite;
+  opacity: 0.5;
+}
+@keyframes sparkle-move {
+  0% { background-position: 10px 10px, 30px 24px, 18px 32px, 60px 18px, 80px 40px, 120px 12px, 160px 30px, 200px 20px, 240px 36px; }
+  100% { background-position: 40px 40px, 60px 54px, 48px 62px, 90px 48px, 110px 70px, 150px 42px, 190px 60px, 230px 50px, 270px 66px; }
+}
