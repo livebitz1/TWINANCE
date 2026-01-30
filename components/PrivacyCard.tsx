@@ -1,4 +1,5 @@
 import React from "react";
+import Image from "next/image";
 
 
 const PrivacyCard = ({ onClose }: { onClose?: () => void }) => (
@@ -6,7 +7,7 @@ const PrivacyCard = ({ onClose }: { onClose?: () => void }) => (
     <div className="relative bg-gradient-to-br from-[#1a1a2e] via-[#23243a] to-[#2563eb] rounded-3xl shadow-2xl p-0 max-w-xl w-full border-2 border-blue-700/40 flex flex-col items-center animate-fade-in">
       {/* Header with icon */}
       <div className="w-full flex flex-col items-center justify-center pt-10 pb-4 bg-gradient-to-r from-blue-800/80 via-indigo-900/80 to-blue-700/80 rounded-t-3xl">
-        <img src="/twinance-logo.png" alt="Twinance Logo" className="w-28 h-28 object-contain mb-3 animate-glow" />
+        <Image src="/twinance-logo.png" alt="Twinance Logo" width={112} height={112} className="w-28 h-28 object-contain mb-3 animate-glow" />
         <h2 className="text-3xl font-extrabold text-blue-200 mb-2 drop-shadow-lg tracking-wide">Privacy Policy</h2>
         <p className="text-blue-100 mb-2 text-lg text-center font-medium max-w-md">Your privacy is important to us. This Privacy Policy explains how Twinance collects, uses, and protects your information.</p>
       </div>

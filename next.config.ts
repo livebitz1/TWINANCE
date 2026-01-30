@@ -1,5 +1,22 @@
 import type { NextConfig } from "next";
 
+// Patch Node's broken experimental localStorage (--localstorage-file without path)
+// so Clerk and other code don't crash during SSR. Must run before any other code.
+const g = globalThis as typeof globalThis & { localStorage?: { getItem?: unknown } };
+if (g.localStorage != null && typeof g.localStorage.getItem !== "function") {
+  const noop = () => null;
+  (g as typeof g & { localStorage: Storage }).localStorage = {
+    getItem: noop,
+    setItem: () => {},
+    removeItem: () => {},
+    clear: () => {},
+    key: () => null,
+    get length() {
+      return 0;
+    },
+  };
+}
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@clerk/nextjs"],

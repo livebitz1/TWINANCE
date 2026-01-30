@@ -2,6 +2,7 @@
 import { useAuth } from "@clerk/nextjs";
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 
 export default function DashboardButton() {
   const { isSignedIn } = useAuth();
@@ -26,7 +27,7 @@ export default function DashboardButton() {
       {showPopup && (
         <div style={{position:'fixed',inset:0,zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(30,41,59,0.7)',backdropFilter:'blur(2px)'}}>
           <div style={{background:'linear-gradient(135deg,#23243a 60%,#2563eb 100%)',borderRadius:'2rem',boxShadow:'0 8px 32px rgba(0,0,0,0.25)',padding:'2.5rem 2rem',maxWidth:'400px',width:'90vw',textAlign:'center',position:'relative'}}>
-            <img src="/twinance-logo.png" alt="Twinance Logo" style={{width:'72px',height:'72px',objectFit:'contain',marginBottom:'1.5rem'}} />
+            <Image src="/twinance-logo.png" alt="Twinance Logo" width={72} height={72} style={{objectFit:'contain',marginBottom:'1.5rem'}} />
             <h2 style={{color:'#fff',fontSize:'2rem',fontWeight:800,marginBottom:'1rem'}}>Access Restricted</h2>
             <p style={{color:'#cbd5e1',fontSize:'1.1rem',marginBottom:'2rem'}}>You must <span style={{color:'#60a5fa',fontWeight:600}}>Sign In</span> or <span style={{color:'#60a5fa',fontWeight:600}}>Sign Up</span> to access the dashboard.</p>
             <Link href="/sign-up" style={{display:'inline-block',background:'linear-gradient(90deg,#2563eb,#60a5fa)',color:'#fff',fontWeight:700,padding:'0.75rem 2rem',borderRadius:'1rem',textDecoration:'none',fontSize:'1rem',boxShadow:'0 2px 8px rgba(59,130,246,0.2)',marginBottom:'0.5rem'}}>Sign Up</Link><br/>

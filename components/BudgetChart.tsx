@@ -14,10 +14,10 @@ import {
 import { cn } from "@/lib/utils";
 import WeekSelector from "./WeekSelector";
 import { useBankStatement } from "@/contexts/BankStatementContext";
-import { Transaction } from "@/services/bankStatementService";
+import { Transaction, normalizeTransactionDate, buildBudgetDataFromTransactions } from "@/services/bankStatementService";
 import { CalendarDays, TrendingUp, TrendingDown, BarChart3, Calendar, ArrowUpDown } from "lucide-react";
 
-type ChartView = 'week' | 'month' | 'balance' | 'comparison';
+type ChartView = 'week' | 'month' | 'balance' | 'comparison' | 'category';
 type ChartType = 'bar' | 'line';
 
 interface BudgetChartProps {
@@ -60,12 +60,15 @@ function getMonthName(monthNum: number): string {
   return months[monthNum - 1] || 'Unknown';
 }
 
-// Process transactions to get monthly insights
+// Process transactions to get monthly insights (normalize date to DD/MM/YYYY first)
 function getMonthlyInsights(transactions: Transaction[]): MonthlyData[] {
   const monthlyMap: Record<string, MonthlyData> = {};
   
   transactions.forEach(transaction => {
-    const [day, month, year] = transaction.date.split('/').map(Number);
+    const dateStr = normalizeTransactionDate(transaction.date);
+    const parts = dateStr.split('/').map(Number);
+    if (parts.length < 3) return;
+    const [day, month, year] = parts;
     const monthKey = `${month}-${year}`;
     
     if (!monthlyMap[monthKey]) {
@@ -95,8 +98,8 @@ function getMonthlyInsights(transactions: Transaction[]): MonthlyData[] {
       monthData.totalExpenses += transaction.amount;
     }
     
-    // Update weekly data
-    const weekNum = getWeekOfMonth(transaction.date);
+    // Update weekly data (use normalized date)
+    const weekNum = getWeekOfMonth(dateStr);
     if (weekNum >= 1 && weekNum <= 4) {
       if (transaction.type === 'debit') {
         monthData.weeklyData[weekNum - 1].amount += transaction.amount;
@@ -157,8 +160,18 @@ export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
     }
   }, [monthlyInsights, selectedMonth]);
 
+  // Category-wise spending from real transactions
+  const categoryChartData = useMemo(() => {
+    if (!hasUploadedStatement || !financialData.transactions?.length) return [];
+    const { byCategory } = buildBudgetDataFromTransactions(financialData.transactions);
+    return byCategory.map((c) => ({ name: c.name, amount: c.amount }));
+  }, [hasUploadedStatement, financialData.transactions]);
+
   // Generate chart data based on the view
   const chartData = useMemo(() => {
+    if (activeView === "category") {
+      return categoryChartData;
+    }
     if (!hasUploadedStatement || !currentMonthData) {
       return [];
     }
@@ -203,7 +216,7 @@ export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
       default:
         return [];
     }
-  }, [activeView, currentMonthData, monthlyInsights, comparisonMonth, hasUploadedStatement]);
+  }, [activeView, currentMonthData, monthlyInsights, comparisonMonth, hasUploadedStatement, categoryChartData]);
 
   // Handle week selection
   const handleWeekSelect = (week: number) => {
@@ -307,6 +320,14 @@ export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
               <ArrowUpDown className="h-4 w-4 mr-1" />
               Compare
             </Button>
+            <Button 
+              variant={activeView === 'category' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setActiveView('category')}
+              disabled={isBlurred}
+            >
+              Category
+            </Button>
           </div>
           
           {/* Month Selection */}
@@ -407,6 +428,7 @@ export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
             <ResponsiveContainer width="100%" height="100%">
               {chartType === 'bar' ? (
                 <BarChart
+                  key={activeView === 'category' ? 'category' : 'default'}
                   data={chartData}
                   margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
                 >
@@ -439,7 +461,7 @@ export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
                   ) : (
                     <Bar 
                       dataKey="amount" 
-                      fill="#3b82f6" 
+                      fill={activeView === "category" ? "#8b5cf6" : "#3b82f6"}
                       radius={[4, 4, 0, 0]}
                       animationDuration={1000}
                     />
@@ -494,9 +516,9 @@ export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
                     <Line 
                       type="monotone" 
                       dataKey="amount" 
-                      stroke="#3b82f6" 
+                      stroke={activeView === "category" ? "#8b5cf6" : "#3b82f6"}
                       strokeWidth={3}
-                      dot={{ fill: '#3b82f6', strokeWidth: 2, r: 4 }}
+                      dot={{ fill: activeView === "category" ? "#8b5cf6" : "#3b82f6", strokeWidth: 2, r: 4 }}
                       animationDuration={1000}
                     />
                   )}

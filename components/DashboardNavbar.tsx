@@ -5,6 +5,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UserButton, SignInButton, useAuth, useUser } from "@clerk/nextjs";
 import { useState, useEffect } from "react";
 import { useBankStatement } from "@/contexts/BankStatementContext";
+import Image from "next/image";
 
 export default function DashboardNavbar() {
   const { isSignedIn } = useAuth();
@@ -20,7 +21,7 @@ export default function DashboardNavbar() {
       <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-0">
         <div className="flex items-center gap-3">
           <button onClick={() => window.location.href = '/'} className="focus:outline-none">
-            <img src="/twinance-logo.png" alt="Twinance Logo" className="w-24 h-24 object-contain rounded-2xl shadow-lg" />
+            <Image src="/twinance-logo.png" alt="Twinance Logo" width={96} height={96} className="w-24 h-24 object-contain rounded-2xl shadow-lg" />
           </button>
           <h1 className="text-xl font-bold">Twinance</h1>
         </div>
@@ -40,13 +41,6 @@ export default function DashboardNavbar() {
                 disabled={!hasUploadedStatement}
               >
                 UPI
-              </TabsTrigger>
-              <TabsTrigger 
-                value="crypto" 
-                className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-                disabled={!hasUploadedStatement}
-              >
-                CRYPTO
               </TabsTrigger>
             </TabsList>
           </Tabs>

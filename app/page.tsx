@@ -1,6 +1,6 @@
-
 import Navbar from "@/components/Navbar";
 import DashboardButton from "@/components/DashboardButton";
+import Image from "next/image";
 
 export default function Home() {
   return (
@@ -52,13 +52,13 @@ export default function Home() {
             pointerEvents: 'none',
             zIndex: 2,
           }} />
-          <img 
+          <Image 
             src="/dashboard-showcase.png" 
             alt="Dashboard Showcase" 
             className="rounded-2xl shadow-2xl" 
+            width={1920}
+            height={1080}
             style={{
-              width: '100%',
-              maxHeight: 'calc(70vh)',
               objectFit: 'cover',
               display: 'block',
               boxShadow: '0 8px 32px rgba(0,0,0,0.25)'

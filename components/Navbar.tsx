@@ -6,6 +6,7 @@ import { UserButton, useAuth } from "@clerk/nextjs";
 import TermsCard from "./TermsCard";
 import PrivacyCard from "./PrivacyCard";
 import { useState } from "react";
+import Image from "next/image";
 
 export default function Navbar() {
   const { isSignedIn } = useAuth();
@@ -40,7 +41,7 @@ export default function Navbar() {
       <nav className="w-full flex items-center justify-between px-8 py-4 z-20 relative" style={{borderTopLeftRadius: '1.5rem', borderTopRightRadius: '1.5rem', background: 'none'}}>
         <div className="flex items-center gap-3">
           <Link href="/">
-            <img src="/twinance-logo.png" alt="Twinance Logo" className="w-24 h-24 object-contain" />
+            <Image src="/twinance-logo.png" alt="Twinance Logo" width={96} height={96} className="w-24 h-24 object-contain" />
           </Link>
         </div>
         <div className="flex-1 flex items-center justify-center gap-10">

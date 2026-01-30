@@ -16,6 +16,8 @@ export interface Transaction {
   balanceAfter?: number;
   merchant?: string;
   upiId?: string;
+  flagged?: boolean;
+  flagReason?: string;
 }
 
 export interface AccountDetails {
@@ -41,6 +43,89 @@ export interface BankStatementData {
   transactions: Transaction[];
   accountDetails?: AccountDetails;
   statementPeriod?: StatementPeriod;
+}
+
+/** Normalize date to DD/MM/YYYY for consistent parsing and display (handles YYYY-MM-DD and DD/MM/YYYY). */
+export function normalizeTransactionDate(dateStr: string): string {
+  if (!dateStr || typeof dateStr !== "string") return dateStr;
+  const trimmed = dateStr.trim();
+  // Already DD/MM/YYYY (e.g. 15/01/2025)
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(trimmed)) {
+    const parts = trimmed.split('/');
+    if (parts[2].length !== 4 || isNaN(Number(parts[2])) || Number(parts[2]) < 1900 || Number(parts[2]) > 2100) {
+      return ""; // Invalid year
+    }
+    return trimmed;
+  }
+  // YYYY-MM-DD (e.g. 2025-01-15)
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch;
+    if (y.length !== 4 || isNaN(Number(y)) || Number(y) < 1900 || Number(y) > 2100) {
+      return ""; // Invalid year
+    }
+    return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
+  }
+  return ""; // Return empty for invalid formats
+}
+
+/** Recalculate income/expenses and counts from real transactions. */
+export function recalculateSummaryFromTransactions(transactions: Transaction[]): {
+  income: number;
+  expenses: number;
+  incomeTransactions: number;
+  expenseTransactions: number;
+} {
+  let income = 0;
+  let expenses = 0;
+  let incomeTransactions = 0;
+  let expenseTransactions = 0;
+  for (const t of transactions) {
+    const amount = Number(t.amount) || 0;
+    if (t.type === "credit") {
+      income += amount;
+      incomeTransactions++;
+    } else {
+      expenses += amount;
+      expenseTransactions++;
+    }
+  }
+  return { income, expenses, incomeTransactions, expenseTransactions };
+}
+
+/** Build daily expense totals and category totals from real transactions. */
+export function buildBudgetDataFromTransactions(transactions: Transaction[]): {
+  daily: { name: string; amount: number }[];
+  byCategory: { name: string; amount: number }[];
+} {
+  const dailyTotals: Record<string, number> = {};
+  const categoryTotals: Record<string, number> = {};
+  for (const t of transactions) {
+    const dateNorm = normalizeTransactionDate(t.date);
+    const parts = dateNorm.split("/");
+    if (parts.length >= 2) {
+      const dayMonth = `${parts[0]}/${parts[1]}`;
+      if (t.type === "debit") {
+        dailyTotals[dayMonth] = (dailyTotals[dayMonth] || 0) + (Number(t.amount) || 0);
+      }
+    }
+    const cat = (t.category || "Other").trim() || "Other";
+    if (t.type === "debit") {
+      categoryTotals[cat] = (categoryTotals[cat] || 0) + (Number(t.amount) || 0);
+    }
+  }
+  const daily = Object.entries(dailyTotals)
+    .map(([name, amount]) => ({ name, amount }))
+    .sort((a, b) => {
+      const [dA, mA] = a.name.split("/").map(Number);
+      const [dB, mB] = b.name.split("/").map(Number);
+      if (mA !== mB) return mA - mB;
+      return dA - dB;
+    });
+  const byCategory = Object.entries(categoryTotals)
+    .map(([name, amount]) => ({ name, amount }))
+    .sort((a, b) => b.amount - a.amount);
+  return { daily, byCategory };
 }
 
 export async function processBankStatement(file: File): Promise<BankStatementData | null> {
@@ -85,9 +170,55 @@ export async function processBankStatement(file: File): Promise<BankStatementDat
     console.log("   📊 Analyzing ALL transactions and account details");
     console.log("   ⏱️ Large statements may require extended processing time");
     
-    const result = await analyzeStatementWithGemini(extractedText, file);
-    
+    let result = await analyzeStatementWithGemini(extractedText, file);
     if (result) {
+      // Normalize all transaction dates and ensure totals/budgetData are from real transactions
+      result.transactions = result.transactions.map((t, idx, arr) => {
+        let flagged = false;
+        let flagReason = "";
+        // Rule 1: Unusual amount
+        if (t.amount > 100000) {
+          flagged = true;
+          flagReason = "Unusual amount for this account";
+        }
+        // Rule 2: Foreign/International transaction
+        else if (t.description && /foreign|international|overseas|usd|eur|gbp|paypal|stripe/i.test(t.description)) {
+          flagged = true;
+          flagReason = "Foreign or international transaction";
+        }
+        // Rule 3: High frequency (3+ transactions in 1 day)
+        else if (arr.filter(tx => tx.date === t.date).length >= 3) {
+          flagged = true;
+          flagReason = "High transaction frequency on this day";
+        }
+        // Rule 4: New merchant or unknown payee
+        else if (t.merchant && /unknown|test|misc|other/i.test(t.merchant)) {
+          flagged = true;
+          flagReason = "Unknown or new merchant";
+        }
+        // Rule 5: Large UPI transfer
+        else if (t.upiId && t.amount > 50000) {
+          flagged = true;
+          flagReason = "Large UPI transfer";
+        }
+        // Add more rules as needed
+        return {
+          ...t,
+          date: normalizeTransactionDate(t.date),
+          flagged,
+          flagReason: flagged ? flagReason : undefined,
+        };
+      });
+      const recalc = recalculateSummaryFromTransactions(result.transactions);
+      const { daily } = buildBudgetDataFromTransactions(result.transactions);
+      result = {
+        ...result,
+        income: `₹${recalc.income.toLocaleString("en-IN")}`,
+        expenses: `₹${recalc.expenses.toLocaleString("en-IN")}`,
+        incomeTransactions: recalc.incomeTransactions,
+        expenseTransactions: recalc.expenseTransactions,
+        budgetData: daily,
+      };
       console.log("✅ Phase 2 Complete: Successfully analyzed statement");
       console.log(`📈 EXTRACTION RESULTS:`);
       console.log(`   💳 Account: ${result.accountDetails?.accountHolder || 'Extracted'}`);

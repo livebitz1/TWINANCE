@@ -1,6 +1,12 @@
 "use client";
 
-import { BankStatementData, Transaction } from "./bankStatementService";
+import {
+  BankStatementData,
+  Transaction,
+  normalizeTransactionDate,
+  recalculateSummaryFromTransactions,
+  buildBudgetDataFromTransactions,
+} from "./bankStatementService";
 import { extractTextFromPDF } from "../utils/pdfUtils";
 import { IndianBankStatementParser } from "./advancedBankStatementParser";
 import { parseIndianBankStatement } from "./bankStatementParser";
@@ -421,44 +427,39 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
         }
       }
       
-      // Validate and fix transaction data
+      // Validate, fix, and normalize transaction data (real data only)
       if (Array.isArray(parsedData.transactions)) {
-        parsedData.transactions = parsedData.transactions.map((transaction: any, index: number) => ({
-          id: transaction.id || `trans-${index + 1}`,
-          date: transaction.date || new Date().toLocaleDateString('en-GB'),
-          description: transaction.description || 'Unknown Transaction',
-          amount: Number(transaction.amount) || 0,
-          type: transaction.type === 'credit' ? 'credit' : 'debit',
-          category: transaction.category || 'Other',
-          referenceNumber: transaction.referenceNumber || `REF${Date.now()}${index}`,
-          balanceAfter: Number(transaction.balanceAfter) || 0,
-          merchant: transaction.merchant || 'Unknown',
-          upiId: transaction.upiId || undefined
-        }));
+        parsedData.transactions = parsedData.transactions.map((transaction: any, index: number) => {
+          const rawDate = transaction.date || new Date().toLocaleDateString("en-GB");
+          const normalizedDate = normalizeTransactionDate(String(rawDate));
+          return {
+            id: transaction.id || `trans-${index + 1}`,
+            date: normalizedDate,
+            description: transaction.description || "Unknown Transaction",
+            amount: Number(transaction.amount) || 0,
+            type: transaction.type === "credit" ? "credit" : "debit",
+            category: (transaction.category || "Other").trim() || "Other",
+            referenceNumber: transaction.referenceNumber || `REF${Date.now()}${index}`,
+            balanceAfter: Number(transaction.balanceAfter) || 0,
+            merchant: transaction.merchant || "",
+            upiId: transaction.upiId || undefined,
+          };
+        }) as Transaction[];
       }
-      
-      // Ensure budget data exists
-      if (!parsedData.budgetData || !Array.isArray(parsedData.budgetData)) {
-        parsedData.budgetData = [];
-        // Generate budget data from transactions if available
-        if (parsedData.transactions && parsedData.transactions.length > 0) {
-          const dailyTotals: Record<string, number> = {};
-          parsedData.transactions.forEach((transaction: any) => {
-            if (transaction.type === 'debit') {
-              const dateParts = transaction.date.split('/');
-              const dayMonth = `${dateParts[0]}/${dateParts[1]}`;
-              dailyTotals[dayMonth] = (dailyTotals[dayMonth] || 0) + transaction.amount;
-            }
-          });
-          
-          parsedData.budgetData = Object.entries(dailyTotals).map(([date, amount]) => ({
-            name: date,
-            amount: amount
-          }));
-        }
-      }
-      
-      console.log("Successfully parsed and validated Gemini response");
+
+      // Recalculate totals from real transactions (single source of truth)
+      const tx = parsedData.transactions || [];
+      const recalc = recalculateSummaryFromTransactions(tx);
+      parsedData.income = recalc.income;
+      parsedData.expenses = recalc.expenses;
+      parsedData.incomeTransactions = recalc.incomeTransactions;
+      parsedData.expenseTransactions = recalc.expenseTransactions;
+
+      // Build budget data from real transactions (daily + category for charts)
+      const { daily } = buildBudgetDataFromTransactions(tx);
+      parsedData.budgetData = daily;
+
+      console.log("Successfully parsed and validated Gemini response (totals from real transactions)");
       
     } catch (parseError) {
       console.error("Error parsing Gemini response:", parseError);

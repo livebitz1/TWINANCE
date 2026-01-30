@@ -18,7 +18,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { Transaction } from "@/services/bankStatementService";
+import { Transaction, normalizeTransactionDate } from "@/services/bankStatementService";
 import { explainTransaction } from "@/services/transactionExplanationService";
 import {
   Search, 
@@ -32,7 +32,9 @@ import {
   Loader2,
   CreditCard,
   TrendingUp,
-  TrendingDown
+  TrendingDown,
+  X,
+  FileText
 } from "lucide-react";
 
 interface TransactionHistoryProps {
@@ -66,9 +68,12 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
 
   const uniqueMonths = useMemo(() => {
     const months = [...new Set(transactions.map(t => {
-      const [, month, year] = t.date.split('/');
+      const dateNorm = normalizeTransactionDate(t.date);
+      const parts = dateNorm.split('/');
+      if (parts.length < 3) return '';
+      const [, month, year] = parts;
       return `${month}/${year}`;
-    }))];
+    }))].filter(Boolean);
     return months.sort((a, b) => {
       const [monthA, yearA] = a.split('/').map(Number);
       const [monthB, yearB] = b.split('/').map(Number);
@@ -90,9 +95,12 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
       
       let matchesMonth = true;
       if (monthFilter !== "all") {
-        const [, month, year] = transaction.date.split('/');
-        const transactionMonth = `${month}/${year}`;
-        matchesMonth = transactionMonth === monthFilter;
+        const dateNorm = normalizeTransactionDate(transaction.date);
+        const parts = dateNorm.split('/');
+        if (parts.length >= 3) {
+          const transactionMonth = `${parts[1]}/${parts[2]}`;
+          matchesMonth = transactionMonth === monthFilter;
+        }
       }
       
       return matchesSearch && matchesType && matchesCategory && matchesMonth;
@@ -103,10 +111,15 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
       let aValue: string | number | Date, bValue: string | number | Date;
       
       switch (sortField) {
-        case 'date':
-          aValue = new Date(a.date.split('/').reverse().join('-'));
-          bValue = new Date(b.date.split('/').reverse().join('-'));
+        case 'date': {
+          const normA = normalizeTransactionDate(a.date);
+          const normB = normalizeTransactionDate(b.date);
+          const partsA = normA.split('/');
+          const partsB = normB.split('/');
+          aValue = partsA.length >= 3 ? new Date(Number(partsA[2]), Number(partsA[1]) - 1, Number(partsA[0])) : new Date(0);
+          bValue = partsB.length >= 3 ? new Date(Number(partsB[2]), Number(partsB[1]) - 1, Number(partsB[0])) : new Date(0);
           break;
+        }
         case 'amount':
           aValue = a.amount;
           bValue = b.amount;
@@ -200,49 +213,55 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
     setCurrentPage(1);
   };
 
+  const hasActiveFilters = searchTerm !== "" || typeFilter !== "all" || categoryFilter !== "all" || monthFilter !== "all";
+
   return (
     <>
       <Card className={cn(
-        "bg-background/10 backdrop-blur-sm border-border/30 w-full mt-6 transition-all",
+        "bg-background/10 backdrop-blur-sm border-border/30 w-full mt-6 transition-all shadow-lg",
         isBlurred && "hover:opacity-60"
       )}>
-        <CardHeader className="pb-4">
-          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-            <div className="flex items-center gap-3">
-              <CardTitle className="text-xl font-semibold">Transaction History</CardTitle>
-              <span className="text-sm text-muted-foreground bg-primary/20 px-3 py-1 rounded-full">
-                {filteredAndSortedTransactions.length} transactions
+        <CardHeader className="pb-3 sm:pb-4 px-4 sm:px-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4">
+            <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+              <CardTitle className="text-lg sm:text-xl font-semibold flex items-center gap-2">
+                <FileText className="h-5 w-5 sm:h-6 sm:w-6 text-primary" />
+                Transaction History
+              </CardTitle>
+              <span className="text-xs sm:text-sm text-muted-foreground bg-primary/20 px-2 sm:px-3 py-1 rounded-full font-medium">
+                {filteredAndSortedTransactions.length} {filteredAndSortedTransactions.length === 1 ? 'transaction' : 'transactions'}
               </span>
             </div>
             
-            {!isBlurred && (
+            {!isBlurred && hasActiveFilters && (
               <Button
                 variant="outline"
+                size="sm"
                 onClick={resetFilters}
-                className="text-sm"
+                className="text-xs sm:text-sm h-8 sm:h-9 w-full sm:w-auto"
               >
-                <Filter className="h-4 w-4 mr-2" />
-                Reset Filters
+                <X className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                Clear Filters
               </Button>
             )}
           </div>
           
           {/* Search and Filters */}
           {!isBlurred && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
+              <div className="relative sm:col-span-2 lg:col-span-1">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                 <input 
                   type="text" 
-                  placeholder="Search transactions, merchants, UPI..."
+                  placeholder="Search transactions..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 pr-4 py-2 text-sm rounded-lg border border-border/30 bg-background/10 w-full focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  className="pl-10 pr-4 py-2 text-sm rounded-lg border border-border/30 bg-background/10 w-full focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-muted-foreground/60"
                 />
               </div>
               
               <Select value={typeFilter} onValueChange={(value: "all" | "credit" | "debit") => setTypeFilter(value)}>
-                <SelectTrigger className="bg-background/10 border-border/30">
+                <SelectTrigger className="bg-background/10 border-border/30 h-10 text-sm">
                   <SelectValue placeholder="Filter by type" />
                 </SelectTrigger>
                 <SelectContent>
@@ -253,7 +272,7 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
               </Select>
               
               <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                <SelectTrigger className="bg-background/10 border-border/30">
+                <SelectTrigger className="bg-background/10 border-border/30 h-10 text-sm">
                   <SelectValue placeholder="Filter by category" />
                 </SelectTrigger>
                 <SelectContent>
@@ -265,7 +284,7 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
               </Select>
               
               <Select value={monthFilter} onValueChange={setMonthFilter}>
-                <SelectTrigger className="bg-background/10 border-border/30">
+                <SelectTrigger className="bg-background/10 border-border/30 h-10 text-sm">
                   <SelectValue placeholder="Filter by month" />
                 </SelectTrigger>
                 <SelectContent>
@@ -279,126 +298,184 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
           )}
         </CardHeader>
         
-        <CardContent className={cn("", isBlurred && "blur-sm select-none")}>
+        <CardContent className={cn("px-4 sm:px-6 pb-4 sm:pb-6", isBlurred && "blur-sm select-none")}>
           {transactions.length === 0 ? (
-            <div className="text-center py-16">
-              <CreditCard className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-              <p className="text-lg text-muted-foreground">No transaction data available.</p>
-              <p className="text-sm text-muted-foreground mt-2">Upload a bank statement to view your transactions.</p>
+            <div className="text-center py-12 sm:py-16">
+              <CreditCard className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-3 sm:mb-4" />
+              <p className="text-base sm:text-lg text-muted-foreground font-medium">No transaction data available.</p>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-2">Upload a bank statement to view your transactions.</p>
+            </div>
+          ) : filteredAndSortedTransactions.length === 0 ? (
+            <div className="text-center py-12 sm:py-16">
+              <Search className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-3 sm:mb-4" />
+              <p className="text-base sm:text-lg text-muted-foreground font-medium">No transactions found.</p>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-2">Try adjusting your filters or search terms.</p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={resetFilters}
+                className="mt-4"
+              >
+                <X className="h-4 w-4 mr-2" />
+                Clear All Filters
+              </Button>
             </div>
           ) : (
             <>
-              {/* Table Header */}
-              <div className="hidden md:grid md:grid-cols-12 gap-4 p-4 bg-background/5 rounded-lg border border-border/20 mb-4">
+              {/* Table Header - Desktop Only */}
+              <div className="hidden lg:grid lg:grid-cols-12 gap-3 xl:gap-4 p-3 xl:p-4 bg-background/5 rounded-lg border border-border/20 mb-3 xl:mb-4">
                 <div className="col-span-1 flex items-center">
-                  <span className="text-sm font-medium text-muted-foreground">Type</span>
+                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Type</span>
                 </div>
-                <div className="col-span-2 flex items-center cursor-pointer" onClick={() => handleSort('date')}>
-                  <span className="text-sm font-medium text-muted-foreground">Date</span>
-                  <ArrowUpDown className="h-3 w-3 ml-1" />
+                <div 
+                  className="col-span-2 flex items-center cursor-pointer hover:text-primary transition-colors" 
+                  onClick={() => handleSort('date')}
+                >
+                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Date</span>
+                  <ArrowUpDown className={cn(
+                    "h-3 w-3 ml-1 transition-all",
+                    sortField === 'date' && "text-primary"
+                  )} />
                 </div>
-                <div className="col-span-3 flex items-center cursor-pointer" onClick={() => handleSort('description')}>
-                  <span className="text-sm font-medium text-muted-foreground">Description</span>
-                  <ArrowUpDown className="h-3 w-3 ml-1" />
+                <div 
+                  className="col-span-3 flex items-center cursor-pointer hover:text-primary transition-colors" 
+                  onClick={() => handleSort('description')}
+                >
+                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Description</span>
+                  <ArrowUpDown className={cn(
+                    "h-3 w-3 ml-1 transition-all",
+                    sortField === 'description' && "text-primary"
+                  )} />
                 </div>
                 <div className="col-span-2 flex items-center">
-                  <span className="text-sm font-medium text-muted-foreground">Category</span>
+                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Category</span>
                 </div>
-                <div className="col-span-2 flex items-center cursor-pointer" onClick={() => handleSort('amount')}>
-                  <span className="text-sm font-medium text-muted-foreground">Amount</span>
-                  <ArrowUpDown className="h-3 w-3 ml-1" />
+                <div 
+                  className="col-span-2 flex items-center cursor-pointer hover:text-primary transition-colors" 
+                  onClick={() => handleSort('amount')}
+                >
+                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Amount</span>
+                  <ArrowUpDown className={cn(
+                    "h-3 w-3 ml-1 transition-all",
+                    sortField === 'amount' && "text-primary"
+                  )} />
                 </div>
                 <div className="col-span-2 flex items-center">
-                  <span className="text-sm font-medium text-muted-foreground">Actions</span>
+                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Actions</span>
                 </div>
               </div>
               
               {/* Transaction Rows */}
-              <div className="space-y-3">
+              <div className="space-y-2 sm:space-y-3">
                 {paginatedTransactions.map((transaction) => (
                   <div 
                     key={transaction.id}
                     className={cn(
-                      "grid grid-cols-1 md:grid-cols-12 gap-4 p-4 rounded-lg border transition-all hover:shadow-md",
+                      "grid grid-cols-1 lg:grid-cols-12 gap-3 xl:gap-4 p-3 sm:p-4 rounded-lg border transition-all hover:shadow-md",
                       transaction.type === 'credit' 
-                        ? "bg-green-500/5 border-green-500/20 hover:bg-green-500/10" 
-                        : "bg-red-500/5 border-red-500/20 hover:bg-red-500/10"
+                        ? "bg-green-500/5 border-green-500/20 hover:bg-green-500/10 hover:border-green-500/30" 
+                        : "bg-red-500/5 border-red-500/20 hover:bg-red-500/10 hover:border-red-500/30"
                     )}
                   >
-                    {/* Mobile Layout */}
-                    <div className="md:hidden col-span-1 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
+                    {/* Mobile & Tablet Layout */}
+                    <div className="lg:hidden col-span-1 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
                           {getTransactionIcon(transaction.type)}
-                          <span className="text-sm font-medium">{transaction.type === 'credit' ? 'Credit' : 'Debit'}</span>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-sm truncate">{transaction.description}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <Calendar className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                              <span className="text-xs text-muted-foreground">{normalizeTransactionDate(transaction.date)}</span>
+                            </div>
+                          </div>
                         </div>
-                        <span className={cn(
-                          "text-lg font-semibold",
-                          transaction.type === 'credit' ? 'text-green-500' : 'text-red-500'
-                        )}>
-                          {formatAmount(transaction.amount, transaction.type)}
-                        </span>
+                        <div className="text-right flex-shrink-0">
+                          <span className={cn(
+                            "text-base sm:text-lg font-semibold whitespace-nowrap",
+                            transaction.type === 'credit' ? 'text-green-500' : 'text-red-500'
+                          )}>
+                            {formatAmount(transaction.amount, transaction.type)}
+                          </span>
+                        </div>
                       </div>
                       
-                      <div>
-                        <p className="font-medium text-sm">{transaction.description}</p>
-                        <div className="flex items-center gap-2 mt-1">
-                          <Calendar className="h-3 w-3 text-muted-foreground" />
-                          <span className="text-xs text-muted-foreground">{transaction.date}</span>
+                      {transaction.referenceNumber && (
+                        <div className="text-xs text-muted-foreground bg-background/30 px-2 py-1 rounded inline-block">
+                          Ref: {transaction.referenceNumber}
                         </div>
-                      </div>
+                      )}
                       
-                      <div className="flex items-center justify-between">
+                      {transaction.flagged && (
+                        <div className="flex items-start gap-2 p-2 bg-yellow-100/50 border border-yellow-300/50 rounded-md">
+                          <Info className="h-3 w-3 text-yellow-700 flex-shrink-0 mt-0.5" />
+                          <span className="text-xs text-yellow-900">{transaction.flagReason}</span>
+                        </div>
+                      )}
+                      
+                      <div className="flex items-center justify-between gap-2 pt-2 border-t border-border/30">
                         <div className="flex items-center gap-2">
-                          <div className={`w-2 h-2 rounded-full ${getCategoryColor(transaction.category)}`} />
+                          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${getCategoryColor(transaction.category)}`} />
                           <span className="text-xs text-muted-foreground">{transaction.category}</span>
                         </div>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleExplainTransaction(transaction)}
-                          className="h-8 w-8 p-0"
+                          className="h-8 text-xs"
                         >
-                          <Info className="h-4 w-4" />
+                          <Info className="h-3 w-3 mr-1" />
+                          Explain
                         </Button>
                       </div>
                     </div>
                     
                     {/* Desktop Layout */}
-                    <div className="hidden md:contents">
+                    <div className="hidden lg:contents">
                       <div className="col-span-1 flex items-center">
                         <div className="flex items-center gap-2">
                           {getTransactionIcon(transaction.type)}
-                          <span className="text-sm font-medium capitalize">{transaction.type}</span>
                         </div>
                       </div>
                       
                       <div className="col-span-2 flex items-center">
                         <div className="flex items-center gap-2">
-                          <Calendar className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-sm">{transaction.date}</span>
+                          <Calendar className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                          <span className="text-xs xl:text-sm">{normalizeTransactionDate(transaction.date)}</span>
                         </div>
                       </div>
                       
-                      <div className="col-span-3 flex items-center">
-                        <div>
-                          <p className="text-sm font-medium">{transaction.description}</p>
+                      <div className="col-span-3 flex items-center min-w-0">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs xl:text-sm font-medium truncate" title={transaction.description}>
+                            {transaction.description}
+                          </p>
                           {transaction.referenceNumber && (
-                            <p className="text-xs text-muted-foreground">Ref: {transaction.referenceNumber}</p>
+                            <p className="text-xs text-muted-foreground truncate" title={`Ref: ${transaction.referenceNumber}`}>
+                              Ref: {transaction.referenceNumber}
+                            </p>
+                          )}
+                          {transaction.flagged && (
+                            <div className="mt-1 flex items-center gap-1">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-900 rounded text-xs border border-yellow-300" title={transaction.flagReason}>
+                                <Info className="h-3 w-3 text-yellow-700" />
+                                <span className="truncate max-w-[150px]">{transaction.flagReason}</span>
+                              </span>
+                            </div>
                           )}
                         </div>
                       </div>
                       
                       <div className="col-span-2 flex items-center">
                         <div className="flex items-center gap-2">
-                          <div className={`w-3 h-3 rounded-full ${getCategoryColor(transaction.category)}`} />
-                          <span className="text-sm">{transaction.category}</span>
+                          <div className={`w-3 h-3 rounded-full flex-shrink-0 ${getCategoryColor(transaction.category)}`} />
+                          <span className="text-xs xl:text-sm truncate" title={transaction.category}>{transaction.category}</span>
                         </div>
                       </div>
                       
                       <div className="col-span-2 flex items-center">
                         <span className={cn(
-                          "text-sm font-semibold",
+                          "text-xs xl:text-sm font-semibold",
                           transaction.type === 'credit' ? 'text-green-500' : 'text-red-500'
                         )}>
                           {formatAmount(transaction.amount, transaction.type)}
@@ -410,7 +487,7 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
                           variant="ghost"
                           size="sm"
                           onClick={() => handleExplainTransaction(transaction)}
-                          className="text-xs"
+                          className="text-xs h-8"
                         >
                           <Info className="h-4 w-4 mr-1" />
                           Explain
@@ -423,31 +500,37 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
               
               {/* Pagination */}
               {totalPages > 1 && (
-                <div className="flex items-center justify-between mt-6">
-                  <div className="text-sm text-muted-foreground">
-                    Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredAndSortedTransactions.length)} of {filteredAndSortedTransactions.length} transactions
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4 mt-4 sm:mt-6 pt-4 border-t border-border/30">
+                  <div className="text-xs sm:text-sm text-muted-foreground order-2 sm:order-1">
+                    Showing <span className="font-medium">{((currentPage - 1) * itemsPerPage) + 1}</span> to <span className="font-medium">{Math.min(currentPage * itemsPerPage, filteredAndSortedTransactions.length)}</span> of <span className="font-medium">{filteredAndSortedTransactions.length}</span>
                   </div>
                   
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 order-1 sm:order-2">
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => setCurrentPage(currentPage - 1)}
                       disabled={currentPage === 1}
+                      className="h-8 sm:h-9"
                     >
                       <ChevronLeft className="h-4 w-4" />
+                      <span className="hidden sm:inline ml-1">Previous</span>
                     </Button>
                     
-                    <span className="text-sm">
-                      Page {currentPage} of {totalPages}
-                    </span>
+                    <div className="flex items-center gap-1 px-2 sm:px-3 py-1 bg-background/20 rounded-md border border-border/30">
+                      <span className="text-xs sm:text-sm font-medium">{currentPage}</span>
+                      <span className="text-xs sm:text-sm text-muted-foreground">/</span>
+                      <span className="text-xs sm:text-sm text-muted-foreground">{totalPages}</span>
+                    </div>
                     
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => setCurrentPage(currentPage + 1)}
                       disabled={currentPage === totalPages}
+                      className="h-8 sm:h-9"
                     >
+                      <span className="hidden sm:inline mr-1">Next</span>
                       <ChevronRight className="h-4 w-4" />
                     </Button>
                   </div>
@@ -460,62 +543,64 @@ export default function TransactionHistory({ transactions, isBlurred = false }: 
 
       {/* AI Transaction Explanation Dialog */}
       <Dialog open={showExplanationDialog} onOpenChange={setShowExplanationDialog}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Bot className="h-5 w-5 text-primary" />
+            <DialogTitle className="flex items-center gap-2 text-base sm:text-lg">
+              <Bot className="h-5 w-5 text-primary flex-shrink-0" />
               AI Transaction Analysis
             </DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="text-xs sm:text-sm">
               Get insights about your transaction from our AI assistant
             </DialogDescription>
           </DialogHeader>
           
           {selectedTransaction && (
-            <div className="space-y-4">
+            <div className="space-y-4 mt-2">
               {/* Transaction Details */}
-              <div className="bg-background/50 p-4 rounded-lg border">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Description</p>
-                    <p className="font-medium">{selectedTransaction.description}</p>
+              <div className="bg-background/50 p-3 sm:p-4 rounded-lg border">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                  <div className="min-w-0">
+                    <p className="text-xs sm:text-sm text-muted-foreground mb-1">Description</p>
+                    <p className="font-medium text-sm sm:text-base truncate" title={selectedTransaction.description}>
+                      {selectedTransaction.description}
+                    </p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Amount</p>
+                    <p className="text-xs sm:text-sm text-muted-foreground mb-1">Amount</p>
                     <p className={cn(
-                      "font-semibold",
+                      "font-semibold text-sm sm:text-base",
                       selectedTransaction.type === 'credit' ? 'text-green-500' : 'text-red-500'
                     )}>
                       {formatAmount(selectedTransaction.amount, selectedTransaction.type)}
                     </p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Date</p>
-                    <p className="font-medium">{selectedTransaction.date}</p>
+                    <p className="text-xs sm:text-sm text-muted-foreground mb-1">Date</p>
+                    <p className="font-medium text-sm sm:text-base">{selectedTransaction.date}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Category</p>
+                    <p className="text-xs sm:text-sm text-muted-foreground mb-1">Category</p>
                     <div className="flex items-center gap-2">
-                      <div className={`w-3 h-3 rounded-full ${getCategoryColor(selectedTransaction.category)}`} />
-                      <span className="font-medium">{selectedTransaction.category}</span>
+                      <div className={`w-3 h-3 rounded-full flex-shrink-0 ${getCategoryColor(selectedTransaction.category)}`} />
+                      <span className="font-medium text-sm sm:text-base truncate">{selectedTransaction.category}</span>
                     </div>
                   </div>
                 </div>
               </div>
               
               {/* AI Explanation */}
-              <div className="bg-primary/5 p-4 rounded-lg border border-primary/20">
-                <h4 className="font-medium mb-2 flex items-center gap-2">
-                  <Bot className="h-4 w-4" />
+              <div className="bg-primary/5 p-3 sm:p-4 rounded-lg border border-primary/20">
+                <h4 className="font-medium mb-2 sm:mb-3 flex items-center gap-2 text-sm sm:text-base">
+                  <Bot className="h-4 w-4 flex-shrink-0" />
                   AI Insights
                 </h4>
                 {isExplaining ? (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Analyzing transaction...
+                  <div className="flex items-center gap-2 text-muted-foreground py-4">
+                    <Loader2 className="h-4 w-4 animate-spin flex-shrink-0" />
+                    <span className="text-sm">Analyzing transaction...</span>
                   </div>
                 ) : (
-                  <p className="text-sm leading-relaxed">{explanation}</p>
+                  <p className="text-xs sm:text-sm leading-relaxed text-foreground/90">{explanation}</p>
                 )}
               </div>
             </div>
