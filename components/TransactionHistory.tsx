@@ -3,12 +3,21 @@
 import React, { useState, useMemo } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { 
-  Select, 
-  SelectContent, 
-  SelectItem, 
-  SelectTrigger, 
-  SelectValue 
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
 } from "@/components/ui/select";
 import {
   Dialog,
@@ -21,20 +30,18 @@ import { cn } from "@/lib/utils";
 import { Transaction, normalizeTransactionDate } from "@/services/bankStatementService";
 import { explainTransaction } from "@/services/transactionExplanationService";
 import {
-  Search, 
-  Calendar, 
-  Filter, 
-  ArrowUpDown, 
-  ChevronLeft, 
+  Search,
+  ArrowUpDown,
+  ChevronLeft,
   ChevronRight,
   Info,
   Bot,
   Loader2,
+  FileText,
   CreditCard,
-  TrendingUp,
-  TrendingDown,
   X,
-  FileText
+  ArrowUpRight,
+  ArrowDownLeft
 } from "lucide-react";
 
 interface TransactionHistoryProps {
@@ -42,571 +49,337 @@ interface TransactionHistoryProps {
   isBlurred?: boolean;
 }
 
-type SortField = 'date' | 'amount' | 'description';
+type SortField = 'date' | 'amount' | 'description' | 'category';
 type SortDirection = 'asc' | 'desc';
 
 export default function TransactionHistory({ transactions, isBlurred = false }: TransactionHistoryProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | "credit" | "debit">("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
-  const [monthFilter, setMonthFilter] = useState<string>("all");
   const [sortField, setSortField] = useState<SortField>('date');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [currentPage, setCurrentPage] = useState(1);
+
+  // Explanation State
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [isExplaining, setIsExplaining] = useState(false);
   const [explanation, setExplanation] = useState<string>("");
   const [showExplanationDialog, setShowExplanationDialog] = useState(false);
-  
-  const itemsPerPage = 10;
 
-  // Extract unique categories and months from transactions
+  const itemsPerPage = 8;
+
+  // --- Derived State: Unique Categories ---
   const uniqueCategories = useMemo(() => {
-    const categories = [...new Set(transactions.map(t => t.category))];
-    return categories.sort();
+    return Array.from(new Set(transactions.map(t => t.category || "Other"))).sort();
   }, [transactions]);
 
-  const uniqueMonths = useMemo(() => {
-    const months = [...new Set(transactions.map(t => {
-      const dateNorm = normalizeTransactionDate(t.date);
-      const parts = dateNorm.split('/');
-      if (parts.length < 3) return '';
-      const [, month, year] = parts;
-      return `${month}/${year}`;
-    }))].filter(Boolean);
-    return months.sort((a, b) => {
-      const [monthA, yearA] = a.split('/').map(Number);
-      const [monthB, yearB] = b.split('/').map(Number);
-      if (yearA !== yearB) return yearB - yearA;
-      return monthB - monthA;
+  // --- Filter Logic ---
+  const filteredTransactions = useMemo(() => {
+    return transactions.filter(t => {
+      // Search
+      const searchLower = searchTerm.toLowerCase();
+      const matchesSearch =
+        t.description.toLowerCase().includes(searchLower) ||
+        t.category?.toLowerCase().includes(searchLower) ||
+        t.merchant?.toLowerCase().includes(searchLower);
+
+      // Filters
+      const matchesType = typeFilter === "all" || t.type === typeFilter;
+      const matchesCategory = categoryFilter === "all" || t.category === categoryFilter;
+
+      return matchesSearch && matchesType && matchesCategory;
     });
-  }, [transactions]);
+  }, [transactions, searchTerm, typeFilter, categoryFilter]);
 
-  // Filter and sort transactions
-  const filteredAndSortedTransactions = useMemo(() => {
-    const filtered = transactions.filter(transaction => {
-      const matchesSearch = transaction.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                           transaction.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                           (transaction.merchant && transaction.merchant.toLowerCase().includes(searchTerm.toLowerCase())) ||
-                           (transaction.referenceNumber && transaction.referenceNumber.toLowerCase().includes(searchTerm.toLowerCase()));
-      
-      const matchesType = typeFilter === "all" || transaction.type === typeFilter;
-      const matchesCategory = categoryFilter === "all" || transaction.category === categoryFilter;
-      
-      let matchesMonth = true;
-      if (monthFilter !== "all") {
-        const dateNorm = normalizeTransactionDate(transaction.date);
-        const parts = dateNorm.split('/');
-        if (parts.length >= 3) {
-          const transactionMonth = `${parts[1]}/${parts[2]}`;
-          matchesMonth = transactionMonth === monthFilter;
-        }
+  // --- Sorting Logic ---
+  const sortedTransactions = useMemo(() => {
+    return [...filteredTransactions].sort((a, b) => {
+      let valA: any = a[sortField as keyof Transaction];
+      let valB: any = b[sortField as keyof Transaction];
+
+      if (sortField === 'date') {
+        const dateA = normalizeTransactionDate(a.date).split('/').reverse().join('');
+        const dateB = normalizeTransactionDate(b.date).split('/').reverse().join('');
+        return sortDirection === 'asc' ? dateA.localeCompare(dateB) : dateB.localeCompare(dateA);
       }
-      
-      return matchesSearch && matchesType && matchesCategory && matchesMonth;
+
+      if (sortField === 'amount') {
+        return sortDirection === 'asc' ? a.amount - b.amount : b.amount - a.amount;
+      }
+
+      // Default string comparison
+      valA = (valA || "").toString().toLowerCase();
+      valB = (valB || "").toString().toLowerCase();
+
+      return sortDirection === 'asc'
+        ? valA.localeCompare(valB)
+        : valB.localeCompare(valA);
     });
+  }, [filteredTransactions, sortField, sortDirection]);
 
-    // Sort transactions
-    filtered.sort((a, b) => {
-      let aValue: string | number | Date, bValue: string | number | Date;
-      
-      switch (sortField) {
-        case 'date': {
-          const normA = normalizeTransactionDate(a.date);
-          const normB = normalizeTransactionDate(b.date);
-          const partsA = normA.split('/');
-          const partsB = normB.split('/');
-          aValue = partsA.length >= 3 ? new Date(Number(partsA[2]), Number(partsA[1]) - 1, Number(partsA[0])) : new Date(0);
-          bValue = partsB.length >= 3 ? new Date(Number(partsB[2]), Number(partsB[1]) - 1, Number(partsB[0])) : new Date(0);
-          break;
-        }
-        case 'amount':
-          aValue = a.amount;
-          bValue = b.amount;
-          break;
-        case 'description':
-          aValue = a.description.toLowerCase();
-          bValue = b.description.toLowerCase();
-          break;
-        default:
-          return 0;
-      }
-      
-      if (sortDirection === 'asc') {
-        return aValue > bValue ? 1 : -1;
-      } else {
-        return aValue < bValue ? 1 : -1;
-      }
-    });
-
-    return filtered;
-  }, [transactions, searchTerm, typeFilter, categoryFilter, monthFilter, sortField, sortDirection]);
-
-  // Pagination
-  const totalPages = Math.ceil(filteredAndSortedTransactions.length / itemsPerPage);
-  const paginatedTransactions = filteredAndSortedTransactions.slice(
+  // --- Pagination Logic ---
+  const totalPages = Math.ceil(sortedTransactions.length / itemsPerPage);
+  const currentData = sortedTransactions.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
 
+  // --- Handlers ---
   const handleSort = (field: SortField) => {
     if (sortField === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
     } else {
       setSortField(field);
-      setSortDirection('desc');
+      setSortDirection('desc'); // Default to newest/highest first
     }
   };
 
-  const handleExplainTransaction = async (transaction: Transaction) => {
-    setSelectedTransaction(transaction);
-    setIsExplaining(true);
+  const clearFilters = () => {
+    setSearchTerm("");
+    setTypeFilter("all");
+    setCategoryFilter("all");
+    setCurrentPage(1);
+    setSortField('date');
+    setSortDirection('desc');
+  };
+
+  const handleExplain = async (t: Transaction) => {
+    setSelectedTransaction(t);
     setShowExplanationDialog(true);
+    setIsExplaining(true);
     setExplanation("");
-    
     try {
-      const explanation = await explainTransaction(transaction);
-      setExplanation(explanation);
+      const result = await explainTransaction(t);
+      setExplanation(result);
     } catch {
-      setExplanation("Sorry, I couldn't analyze this transaction at the moment. Please try again later.");
+      setExplanation("Unable to analyze this transaction right now.");
     } finally {
       setIsExplaining(false);
     }
   };
 
-  const getCategoryColor = (category: string): string => {
-    const colorMap: Record<string, string> = {
-      "Income": "bg-green-500",
-      "Food & Dining": "bg-orange-500",
-      "Transportation": "bg-blue-500",
-      "Shopping": "bg-purple-500",
-      "Bills & Utilities": "bg-red-500",
-      "Healthcare": "bg-cyan-500",
-      "UPI": "bg-indigo-500",
-      "Transfer": "bg-yellow-500",
-      "Other": "bg-gray-500"
+  // --- Helpers ---
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      maximumFractionDigits: 0
+    }).format(amount);
+  };
+
+  const getCategoryColor = (cat: string) => {
+    const colors: Record<string, string> = {
+      'Food & Dining': 'bg-orange-100 text-orange-700 border-orange-200',
+      'Shopping': 'bg-purple-100 text-purple-700 border-purple-200',
+      'Transportation': 'bg-blue-100 text-blue-700 border-blue-200',
+      'Bills & Utilities': 'bg-red-100 text-red-700 border-red-200',
+      'Income': 'bg-emerald-100 text-emerald-700 border-emerald-200',
+      'Investment': 'bg-teal-100 text-teal-700 border-teal-200',
+      'Transfer': 'bg-gray-100 text-gray-700 border-gray-200',
     };
-    
-    return colorMap[category] || "bg-gray-500";
+    return colors[cat] || 'bg-slate-100 text-slate-700 border-slate-200';
   };
-
-  const getTransactionIcon = (type: string) => {
-    return type === 'credit' ? (
-      <TrendingUp className="h-4 w-4 text-green-500" />
-    ) : (
-      <TrendingDown className="h-4 w-4 text-red-500" />
-    );
-  };
-
-  const formatAmount = (amount: number, type: string) => {
-    const formatted = `₹${Math.abs(amount).toLocaleString('en-IN')}`;
-    return type === 'credit' ? `+${formatted}` : `-${formatted}`;
-  };
-
-  const resetFilters = () => {
-    setSearchTerm("");
-    setTypeFilter("all");
-    setCategoryFilter("all");
-    setMonthFilter("all");
-    setSortField('date');
-    setSortDirection('desc');
-    setCurrentPage(1);
-  };
-
-  const hasActiveFilters = searchTerm !== "" || typeFilter !== "all" || categoryFilter !== "all" || monthFilter !== "all";
 
   return (
-    <>
-      <Card className={cn(
-        "bg-background/10 backdrop-blur-sm border-border/30 w-full mt-6 transition-all shadow-lg",
-        isBlurred && "hover:opacity-60"
-      )}>
-        <CardHeader className="pb-3 sm:pb-4 px-4 sm:px-6">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4">
-            <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-              <CardTitle className="text-lg sm:text-xl font-semibold flex items-center gap-2">
-                <FileText className="h-5 w-5 sm:h-6 sm:w-6 text-primary" />
-                Transaction History
-              </CardTitle>
-              <span className="text-xs sm:text-sm text-muted-foreground bg-primary/20 px-2 sm:px-3 py-1 rounded-full font-medium">
-                {filteredAndSortedTransactions.length} {filteredAndSortedTransactions.length === 1 ? 'transaction' : 'transactions'}
-              </span>
+    <Card className={cn(
+      "w-full bg-background/50 backdrop-blur-md border-border/40 shadow-sm transition-all",
+      isBlurred && "blur-sm opacity-60 pointer-events-none"
+    )}>
+      <CardHeader className="px-6 py-4 border-b border-border/10">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div>
+            <CardTitle className="text-xl font-semibold flex items-center gap-2">
+              <FileText className="w-5 h-5 text-primary" />
+              Transaction History
+            </CardTitle>
+            <p className="text-sm text-muted-foreground mt-1">
+              Showing {filteredTransactions.length} transactions
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2 w-full md:w-auto">
+            <div className="relative flex-1 md:w-64">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <input
+                placeholder="Search merchant, desc..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full h-9 pl-9 pr-4 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary"
+              />
             </div>
-            
-            {!isBlurred && hasActiveFilters && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={resetFilters}
-                className="text-xs sm:text-sm h-8 sm:h-9 w-full sm:w-auto"
-              >
-                <X className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                Clear Filters
+            <Select value={typeFilter} onValueChange={(v: any) => setTypeFilter(v)}>
+              <SelectTrigger className="w-[110px] h-9">
+                <SelectValue placeholder="Type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="credit">Income</SelectItem>
+                <SelectItem value="debit">Expense</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+              <SelectTrigger className="w-[140px] h-9">
+                <SelectValue placeholder="Category" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Categories</SelectItem>
+                {uniqueCategories.map(c => (
+                  <SelectItem key={c} value={c}>{c}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {(searchTerm || typeFilter !== 'all' || categoryFilter !== 'all') && (
+              <Button variant="ghost" size="icon" onClick={clearFilters} className="h-9 w-9" title="Clear Filters">
+                <X className="w-4 h-4 text-muted-foreground" />
               </Button>
             )}
           </div>
-          
-          {/* Search and Filters */}
-          {!isBlurred && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
-              <div className="relative sm:col-span-2 lg:col-span-1">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                <input 
-                  type="text" 
-                  placeholder="Search transactions..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 pr-4 py-2 text-sm rounded-lg border border-border/30 bg-background/10 w-full focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-muted-foreground/60"
-                />
-              </div>
-              
-              <Select value={typeFilter} onValueChange={(value: "all" | "credit" | "debit") => setTypeFilter(value)}>
-                <SelectTrigger className="bg-background/10 border-border/30 h-10 text-sm">
-                  <SelectValue placeholder="Filter by type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Types</SelectItem>
-                  <SelectItem value="credit">Credit Only</SelectItem>
-                  <SelectItem value="debit">Debit Only</SelectItem>
-                </SelectContent>
-              </Select>
-              
-              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                <SelectTrigger className="bg-background/10 border-border/30 h-10 text-sm">
-                  <SelectValue placeholder="Filter by category" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Categories</SelectItem>
-                  {uniqueCategories.map(category => (
-                    <SelectItem key={category} value={category}>{category}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              
-              <Select value={monthFilter} onValueChange={setMonthFilter}>
-                <SelectTrigger className="bg-background/10 border-border/30 h-10 text-sm">
-                  <SelectValue placeholder="Filter by month" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Months</SelectItem>
-                  {uniqueMonths.map(month => (
-                    <SelectItem key={month} value={month}>{month}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-        </CardHeader>
-        
-        <CardContent className={cn("px-4 sm:px-6 pb-4 sm:pb-6", isBlurred && "blur-sm select-none")}>
-          {transactions.length === 0 ? (
-            <div className="text-center py-12 sm:py-16">
-              <CreditCard className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-3 sm:mb-4" />
-              <p className="text-base sm:text-lg text-muted-foreground font-medium">No transaction data available.</p>
-              <p className="text-xs sm:text-sm text-muted-foreground mt-2">Upload a bank statement to view your transactions.</p>
-            </div>
-          ) : filteredAndSortedTransactions.length === 0 ? (
-            <div className="text-center py-12 sm:py-16">
-              <Search className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-3 sm:mb-4" />
-              <p className="text-base sm:text-lg text-muted-foreground font-medium">No transactions found.</p>
-              <p className="text-xs sm:text-sm text-muted-foreground mt-2">Try adjusting your filters or search terms.</p>
+        </div>
+      </CardHeader>
+
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader className="bg-muted/30">
+              <TableRow>
+                <TableHead className="w-[130px] cursor-pointer hover:text-primary" onClick={() => handleSort('date')}>
+                  <div className="flex items-center gap-1">
+                    Date
+                    {sortField === 'date' && <ArrowUpDown className="w-3 h-3" />}
+                  </div>
+                </TableHead>
+                <TableHead className="w-[40%] cursor-pointer hover:text-primary" onClick={() => handleSort('description')}>
+                  <div className="flex items-center gap-1">
+                    Description
+                    {sortField === 'description' && <ArrowUpDown className="w-3 h-3" />}
+                  </div>
+                </TableHead>
+                <TableHead className="w-[150px] cursor-pointer hover:text-primary" onClick={() => handleSort('category')}>
+                  <div className="flex items-center gap-1">
+                    Category
+                    {sortField === 'category' && <ArrowUpDown className="w-3 h-3" />}
+                  </div>
+                </TableHead>
+                <TableHead className="text-right cursor-pointer hover:text-primary" onClick={() => handleSort('amount')}>
+                  <div className="flex items-center justify-end gap-1">
+                    Amount
+                    {sortField === 'amount' && <ArrowUpDown className="w-3 h-3" />}
+                  </div>
+                </TableHead>
+                <TableHead className="w-[80px] text-center">Action</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {currentData.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+                    {transactions.length === 0 ? "No transactions found." : "No results match your filters."}
+                  </TableCell>
+                </TableRow>
+              ) : (
+                currentData.map((t) => (
+                  <TableRow key={t.id} className="group hover:bg-muted/30 transition-colors">
+                    <TableCell className="font-medium text-xs text-muted-foreground">
+                      {normalizeTransactionDate(t.date)}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col">
+                        <span className="font-medium text-sm truncate max-w-[280px]" title={t.description}>
+                          {t.description}
+                        </span>
+                        {t.merchant && (
+                          <span className="text-xs text-muted-foreground">{t.merchant}</span>
+                        )}
+                        {t.flagged && (
+                          <div className="flex items-center gap-1 text-[10px] text-amber-600 mt-0.5">
+                            <Info className="w-3 h-3" />
+                            {t.flagReason}
+                          </div>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className={cn("font-normal whitespace-nowrap", getCategoryColor(t.category))}>
+                        {t.category}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className={cn(
+                        "flex items-center justify-end gap-1 font-semibold",
+                        t.type === 'credit' ? "text-emerald-600" : "text-rose-600"
+                      )}>
+                        {t.type === 'credit' ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownLeft className="w-3 h-3" />}
+                        {formatCurrency(t.amount)}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-primary"
+                        onClick={() => handleExplain(t)}
+                      >
+                        <Bot className="w-4 h-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-6 py-4 border-t border-border/10 bg-muted/10">
+            <span className="text-xs text-muted-foreground">
+              Page {currentPage} of {totalPages}
+            </span>
+            <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={resetFilters}
-                className="mt-4"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(c => Math.max(1, c - 1))}
+                disabled={currentPage === 1}
               >
-                <X className="h-4 w-4 mr-2" />
-                Clear All Filters
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(c => Math.min(totalPages, c + 1))}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronRight className="w-4 h-4" />
               </Button>
             </div>
-          ) : (
-            <>
-              {/* Table Header - Desktop Only */}
-              <div className="hidden lg:grid lg:grid-cols-12 gap-3 xl:gap-4 p-3 xl:p-4 bg-background/5 rounded-lg border border-border/20 mb-3 xl:mb-4">
-                <div className="col-span-1 flex items-center">
-                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Type</span>
-                </div>
-                <div 
-                  className="col-span-2 flex items-center cursor-pointer hover:text-primary transition-colors" 
-                  onClick={() => handleSort('date')}
-                >
-                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Date</span>
-                  <ArrowUpDown className={cn(
-                    "h-3 w-3 ml-1 transition-all",
-                    sortField === 'date' && "text-primary"
-                  )} />
-                </div>
-                <div 
-                  className="col-span-3 flex items-center cursor-pointer hover:text-primary transition-colors" 
-                  onClick={() => handleSort('description')}
-                >
-                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Description</span>
-                  <ArrowUpDown className={cn(
-                    "h-3 w-3 ml-1 transition-all",
-                    sortField === 'description' && "text-primary"
-                  )} />
-                </div>
-                <div className="col-span-2 flex items-center">
-                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Category</span>
-                </div>
-                <div 
-                  className="col-span-2 flex items-center cursor-pointer hover:text-primary transition-colors" 
-                  onClick={() => handleSort('amount')}
-                >
-                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Amount</span>
-                  <ArrowUpDown className={cn(
-                    "h-3 w-3 ml-1 transition-all",
-                    sortField === 'amount' && "text-primary"
-                  )} />
-                </div>
-                <div className="col-span-2 flex items-center">
-                  <span className="text-xs xl:text-sm font-medium text-muted-foreground">Actions</span>
-                </div>
-              </div>
-              
-              {/* Transaction Rows */}
-              <div className="space-y-2 sm:space-y-3">
-                {paginatedTransactions.map((transaction) => (
-                  <div 
-                    key={transaction.id}
-                    className={cn(
-                      "grid grid-cols-1 lg:grid-cols-12 gap-3 xl:gap-4 p-3 sm:p-4 rounded-lg border transition-all hover:shadow-md",
-                      transaction.type === 'credit' 
-                        ? "bg-green-500/5 border-green-500/20 hover:bg-green-500/10 hover:border-green-500/30" 
-                        : "bg-red-500/5 border-red-500/20 hover:bg-red-500/10 hover:border-red-500/30"
-                    )}
-                  >
-                    {/* Mobile & Tablet Layout */}
-                    <div className="lg:hidden col-span-1 space-y-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-2 min-w-0 flex-1">
-                          {getTransactionIcon(transaction.type)}
-                          <div className="min-w-0 flex-1">
-                            <p className="font-medium text-sm truncate">{transaction.description}</p>
-                            <div className="flex items-center gap-2 mt-1">
-                              <Calendar className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                              <span className="text-xs text-muted-foreground">{normalizeTransactionDate(transaction.date)}</span>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="text-right flex-shrink-0">
-                          <span className={cn(
-                            "text-base sm:text-lg font-semibold whitespace-nowrap",
-                            transaction.type === 'credit' ? 'text-green-500' : 'text-red-500'
-                          )}>
-                            {formatAmount(transaction.amount, transaction.type)}
-                          </span>
-                        </div>
-                      </div>
-                      
-                      {transaction.referenceNumber && (
-                        <div className="text-xs text-muted-foreground bg-background/30 px-2 py-1 rounded inline-block">
-                          Ref: {transaction.referenceNumber}
-                        </div>
-                      )}
-                      
-                      {transaction.flagged && (
-                        <div className="flex items-start gap-2 p-2 bg-yellow-100/50 border border-yellow-300/50 rounded-md">
-                          <Info className="h-3 w-3 text-yellow-700 flex-shrink-0 mt-0.5" />
-                          <span className="text-xs text-yellow-900">{transaction.flagReason}</span>
-                        </div>
-                      )}
-                      
-                      <div className="flex items-center justify-between gap-2 pt-2 border-t border-border/30">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${getCategoryColor(transaction.category)}`} />
-                          <span className="text-xs text-muted-foreground">{transaction.category}</span>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleExplainTransaction(transaction)}
-                          className="h-8 text-xs"
-                        >
-                          <Info className="h-3 w-3 mr-1" />
-                          Explain
-                        </Button>
-                      </div>
-                    </div>
-                    
-                    {/* Desktop Layout */}
-                    <div className="hidden lg:contents">
-                      <div className="col-span-1 flex items-center">
-                        <div className="flex items-center gap-2">
-                          {getTransactionIcon(transaction.type)}
-                        </div>
-                      </div>
-                      
-                      <div className="col-span-2 flex items-center">
-                        <div className="flex items-center gap-2">
-                          <Calendar className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                          <span className="text-xs xl:text-sm">{normalizeTransactionDate(transaction.date)}</span>
-                        </div>
-                      </div>
-                      
-                      <div className="col-span-3 flex items-center min-w-0">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs xl:text-sm font-medium truncate" title={transaction.description}>
-                            {transaction.description}
-                          </p>
-                          {transaction.referenceNumber && (
-                            <p className="text-xs text-muted-foreground truncate" title={`Ref: ${transaction.referenceNumber}`}>
-                              Ref: {transaction.referenceNumber}
-                            </p>
-                          )}
-                          {transaction.flagged && (
-                            <div className="mt-1 flex items-center gap-1">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-900 rounded text-xs border border-yellow-300" title={transaction.flagReason}>
-                                <Info className="h-3 w-3 text-yellow-700" />
-                                <span className="truncate max-w-[150px]">{transaction.flagReason}</span>
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      
-                      <div className="col-span-2 flex items-center">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-3 h-3 rounded-full flex-shrink-0 ${getCategoryColor(transaction.category)}`} />
-                          <span className="text-xs xl:text-sm truncate" title={transaction.category}>{transaction.category}</span>
-                        </div>
-                      </div>
-                      
-                      <div className="col-span-2 flex items-center">
-                        <span className={cn(
-                          "text-xs xl:text-sm font-semibold",
-                          transaction.type === 'credit' ? 'text-green-500' : 'text-red-500'
-                        )}>
-                          {formatAmount(transaction.amount, transaction.type)}
-                        </span>
-                      </div>
-                      
-                      <div className="col-span-2 flex items-center">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleExplainTransaction(transaction)}
-                          className="text-xs h-8"
-                        >
-                          <Info className="h-4 w-4 mr-1" />
-                          Explain
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4 mt-4 sm:mt-6 pt-4 border-t border-border/30">
-                  <div className="text-xs sm:text-sm text-muted-foreground order-2 sm:order-1">
-                    Showing <span className="font-medium">{((currentPage - 1) * itemsPerPage) + 1}</span> to <span className="font-medium">{Math.min(currentPage * itemsPerPage, filteredAndSortedTransactions.length)}</span> of <span className="font-medium">{filteredAndSortedTransactions.length}</span>
-                  </div>
-                  
-                  <div className="flex items-center gap-2 order-1 sm:order-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setCurrentPage(currentPage - 1)}
-                      disabled={currentPage === 1}
-                      className="h-8 sm:h-9"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                      <span className="hidden sm:inline ml-1">Previous</span>
-                    </Button>
-                    
-                    <div className="flex items-center gap-1 px-2 sm:px-3 py-1 bg-background/20 rounded-md border border-border/30">
-                      <span className="text-xs sm:text-sm font-medium">{currentPage}</span>
-                      <span className="text-xs sm:text-sm text-muted-foreground">/</span>
-                      <span className="text-xs sm:text-sm text-muted-foreground">{totalPages}</span>
-                    </div>
-                    
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setCurrentPage(currentPage + 1)}
-                      disabled={currentPage === totalPages}
-                      className="h-8 sm:h-9"
-                    >
-                      <span className="hidden sm:inline mr-1">Next</span>
-                      <ChevronRight className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </CardContent>
-      </Card>
+          </div>
+        )}
+      </CardContent>
 
-      {/* AI Transaction Explanation Dialog */}
       <Dialog open={showExplanationDialog} onOpenChange={setShowExplanationDialog}>
-        <DialogContent className="max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base sm:text-lg">
-              <Bot className="h-5 w-5 text-primary flex-shrink-0" />
-              AI Transaction Analysis
-            </DialogTitle>
-            <DialogDescription className="text-xs sm:text-sm">
-              Get insights about your transaction from our AI assistant
+            <DialogTitle>Transaction Insight</DialogTitle>
+            <DialogDescription>
+              AI Analysis for <span className="font-semibold text-foreground">{selectedTransaction?.merchant || 'this transaction'}</span>
             </DialogDescription>
           </DialogHeader>
-          
-          {selectedTransaction && (
-            <div className="space-y-4 mt-2">
-              {/* Transaction Details */}
-              <div className="bg-background/50 p-3 sm:p-4 rounded-lg border">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <div className="min-w-0">
-                    <p className="text-xs sm:text-sm text-muted-foreground mb-1">Description</p>
-                    <p className="font-medium text-sm sm:text-base truncate" title={selectedTransaction.description}>
-                      {selectedTransaction.description}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs sm:text-sm text-muted-foreground mb-1">Amount</p>
-                    <p className={cn(
-                      "font-semibold text-sm sm:text-base",
-                      selectedTransaction.type === 'credit' ? 'text-green-500' : 'text-red-500'
-                    )}>
-                      {formatAmount(selectedTransaction.amount, selectedTransaction.type)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs sm:text-sm text-muted-foreground mb-1">Date</p>
-                    <p className="font-medium text-sm sm:text-base">{selectedTransaction.date}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs sm:text-sm text-muted-foreground mb-1">Category</p>
-                    <div className="flex items-center gap-2">
-                      <div className={`w-3 h-3 rounded-full flex-shrink-0 ${getCategoryColor(selectedTransaction.category)}`} />
-                      <span className="font-medium text-sm sm:text-base truncate">{selectedTransaction.category}</span>
-                    </div>
-                  </div>
-                </div>
+          <div className="mt-4 p-4 bg-muted/40 rounded-lg border border-border/50 text-sm leading-relaxed">
+            {isExplaining ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Analyzing spending pattern...
               </div>
-              
-              {/* AI Explanation */}
-              <div className="bg-primary/5 p-3 sm:p-4 rounded-lg border border-primary/20">
-                <h4 className="font-medium mb-2 sm:mb-3 flex items-center gap-2 text-sm sm:text-base">
-                  <Bot className="h-4 w-4 flex-shrink-0" />
-                  AI Insights
-                </h4>
-                {isExplaining ? (
-                  <div className="flex items-center gap-2 text-muted-foreground py-4">
-                    <Loader2 className="h-4 w-4 animate-spin flex-shrink-0" />
-                    <span className="text-sm">Analyzing transaction...</span>
-                  </div>
-                ) : (
-                  <p className="text-xs sm:text-sm leading-relaxed text-foreground/90">{explanation}</p>
-                )}
-              </div>
-            </div>
-          )}
+            ) : (
+              explanation
+            )}
+          </div>
         </DialogContent>
       </Dialog>
-    </>
+    </Card>
   );
 }

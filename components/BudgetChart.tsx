@@ -348,13 +348,17 @@ export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
                   key={v}
                   onClick={() => setActiveView(v)}
                   className={cn(
-                    "px-3 py-1.5 text-xs rounded-full border transition-all duration-200",
+                    "relative px-4 py-2 text-xs font-medium rounded-full transition-all duration-300 overflow-hidden group",
+                    // Glassmorphism Base
+                    "backdrop-blur-md border border-white/10 shadow-[0_4px_30px_rgba(0,0,0,0.1)]",
                     activeView === v
-                      ? "bg-blue-500/10 border-blue-500/50 text-blue-400 shadow-[0_0_10px_rgba(59,130,246,0.2)]"
-                      : "bg-transparent border-transparent text-muted-foreground hover:bg-white/5"
+                      ? "bg-blue-500/20 text-blue-300 border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.3)]"
+                      : "bg-white/5 text-muted-foreground hover:bg-white/10 hover:text-white hover:border-white/20 hover:shadow-[0_0_10px_rgba(255,255,255,0.1)]"
                   )}
                 >
-                  {v.charAt(0).toUpperCase() + v.slice(1)}
+                  <span className="relative z-10">{v.charAt(0).toUpperCase() + v.slice(1)}</span>
+                  {/* Liquid shine effect on hover */}
+                  <div className="absolute inset-0 -translate-x-full group-hover:animate-[shimmer_1.5s_infinite] bg-gradient-to-r from-transparent via-white/10 to-transparent z-0" />
                 </button>
               ))}
             </div>
