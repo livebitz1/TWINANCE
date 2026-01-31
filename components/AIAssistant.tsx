@@ -1,89 +1,204 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { Bot, Loader2 } from "lucide-react";
+import { Bot, Loader2, Send, Sparkles, TrendingUp, Calendar, DollarSign } from "lucide-react";
 import { useBankStatement } from "@/contexts/BankStatementContext";
-import { Transaction } from "@/services/bankStatementService";
+import { AIFinancialChatService, ChatMessage, QueryType } from "@/services/aiChatService";
+import ReactMarkdown from "react-markdown";
 
 interface AIAssistantProps {
   isBlurred?: boolean;
 }
 
+// Suggested questions for quick access
+const SUGGESTED_QUESTIONS = [
+  { icon: TrendingUp, text: "How much did I spend last month?", category: "monthly" },
+  { icon: Calendar, text: "What did I buy yesterday?", category: "daily" },
+  { icon: DollarSign, text: "Show my food expenses", category: "category" },
+  { icon: Sparkles, text: "Give me savings tips", category: "savings" },
+];
+
 export default function AIAssistant({ isBlurred = false }: AIAssistantProps) {
   const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState([
-    { content: "Hello! I'm your financial assistant. I can answer questions about your bank statement and provide financial insights.", sender: "ai" },
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      role: "assistant",
+      content: "👋 Hello! I'm your AI financial assistant with full access to your bank statement. Ask me anything about your spending, savings, or specific transactions!",
+      timestamp: new Date()
+    },
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(true);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const { hasUploadedStatement, financialData } = useBankStatement();
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!message.trim() || isBlurred || !hasUploadedStatement) return;
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const handleSendMessage = async (messageText?: string) => {
+    const textToSend = messageText || message;
+    if (!textToSend.trim() || isBlurred || !hasUploadedStatement) return;
 
     // Add user message
-    setMessages((prev) => [...prev, { content: message, sender: "user" }]);
-    
-    // Clear input
-    const userMessage = message;
+    const userMessage: ChatMessage = {
+      role: "user",
+      content: textToSend,
+      timestamp: new Date()
+    };
+    setMessages((prev) => [...prev, userMessage]);
+
+    // Clear input and hide suggestions
     setMessage("");
+    setShowSuggestions(false);
     setIsLoading(true);
-    
-    // In a production app, you would send this to Gemini API
-    // For now, simulate the AI response based on the query and financial data
-    setTimeout(() => {
-      const aiResponse = generateAIResponse(userMessage, financialData);
-      setMessages((prev) => [
-        ...prev,
-        { content: aiResponse, sender: "ai" },
-      ]);
+
+    try {
+      // Build context from financial data
+      const context = {
+        transactions: financialData.transactions || [],
+        totalBalance: financialData.totalBalance || "₹0",
+        income: financialData.income || "₹0",
+        expenses: financialData.expenses || "₹0",
+        statementPeriod: financialData.statementPeriod
+      };
+
+      // Process query with AI service
+      const aiResponse = await AIFinancialChatService.processQuery(
+        textToSend,
+        context,
+        messages
+      );
+
+      setMessages((prev) => [...prev, aiResponse]);
+    } catch (error) {
+      console.error('[AI Assistant] Error:', error);
+      const errorMessage: ChatMessage = {
+        role: "assistant",
+        content: "I apologize, but I encountered an error. Please try asking your question differently.",
+        timestamp: new Date()
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
       setIsLoading(false);
-    }, 1500);
+    }
+  };
+
+  const handleSuggestedQuestion = (question: string) => {
+    setMessage(question);
+    handleSendMessage(question);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    handleSendMessage();
   };
 
   return (
     <Card className={cn(
-      "bg-background/10 backdrop-blur-sm border-border/30 h-full transition-all shadow-md hover:shadow-lg",
+      "bg-background/10 backdrop-blur-sm border-border/30 h-full transition-all shadow-md hover:shadow-lg flex flex-col",
       isBlurred && "hover:opacity-60"
     )}>
-      <CardHeader className="pb-2 border-b border-border/20">
+      <CardHeader className="pb-2 border-b border-border/20 flex-shrink-0">
         <div className="flex justify-between items-center">
           <CardTitle className="text-lg font-medium flex items-center">
             <Bot className="h-5 w-5 mr-2 text-primary" />
-            AI ASSISTANT
+            AI FINANCIAL ASSISTANT
           </CardTitle>
-          <div className="text-xs bg-primary/20 text-primary-foreground px-2 py-1 rounded-full">
+          <div className="text-xs bg-primary/20 text-primary-foreground px-2 py-1 rounded-full flex items-center gap-1">
+            <Sparkles className="h-3 w-3" />
             Gemini AI
           </div>
         </div>
+        {hasUploadedStatement && (
+          <div className="text-xs text-muted-foreground mt-1">
+            {financialData.transactions?.length || 0} transactions analyzed
+          </div>
+        )}
       </CardHeader>
 
-      <CardContent className="p-4">
-        <div className={cn("space-y-3 h-[150px] sm:h-[180px] md:h-[220px] overflow-y-auto mb-4 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-transparent", isBlurred && "blur-sm select-none")}>
+      <CardContent className="p-4 flex-1 flex flex-col overflow-hidden">
+        {/* Messages */}
+        <div className={cn(
+          "flex-1 space-y-3 overflow-y-auto mb-4 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-transparent",
+          isBlurred && "blur-sm select-none"
+        )}>
           {messages.map((msg, index) => (
-            <div 
-              key={index} 
-              className={`p-2 rounded-lg border border-border/30 ${
-                msg.sender === 'ai' ? 'bg-background/20' : 'bg-primary/20'
-              } ${msg.sender === 'ai' ? '' : 'ml-auto max-w-[80%]'} ${msg.sender === 'ai' ? 'max-w-[80%]' : ''} shadow-sm`}
+            <div
+              key={index}
+              className={cn(
+                "p-3 rounded-lg border border-border/30 shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300",
+                msg.role === 'assistant'
+                  ? 'bg-background/20 max-w-[85%]'
+                  : 'bg-primary/20 ml-auto max-w-[85%]'
+              )}
             >
-              {msg.content}
+              <div className="text-sm prose prose-invert max-w-none">
+                {msg.role === 'assistant' ? (
+                  <ReactMarkdown
+                    components={{
+                      h2: ({ node, ...props }) => <h2 className="text-sm font-bold mt-2 mb-1 uppercase tracking-wider opacity-80" {...props} />,
+                      p: ({ node, ...props }) => <p className="mb-2 leading-relaxed" {...props} />,
+                      ul: ({ node, ...props }) => <ul className="list-disc pl-4 mb-2 space-y-1" {...props} />,
+                      li: ({ node, ...props }) => <li className="mb-0.5" {...props} />,
+                      strong: ({ node, ...props }) => <strong className="text-primary font-bold" {...props} />,
+                    }}
+                  >
+                    {msg.content}
+                  </ReactMarkdown>
+                ) : (
+                  <span className="whitespace-pre-wrap">{msg.content}</span>
+                )}
+              </div>
+              {msg.metadata?.queryType && (
+                <div className="text-xs text-muted-foreground mt-2 flex items-center gap-2">
+                  <span className="bg-primary/10 px-2 py-0.5 rounded">
+                    {msg.metadata.queryType.replace('_', ' ')}
+                  </span>
+                  {msg.metadata.transactionsShown && msg.metadata.transactionsShown > 0 && (
+                    <span>{msg.metadata.transactionsShown} transactions</span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
-          
+
           {isLoading && (
-            <div className="p-2 rounded-lg border border-border/30 bg-background/20 max-w-[80%] shadow-sm flex items-center">
+            <div className="p-3 rounded-lg border border-border/30 bg-background/20 max-w-[85%] shadow-sm flex items-center">
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               Analyzing your finances...
             </div>
           )}
+
+          <div ref={messagesEndRef} />
         </div>
+
+        {/* Suggested Questions */}
+        {showSuggestions && hasUploadedStatement && messages.length <= 1 && (
+          <div className="mb-3 space-y-2">
+            <div className="text-xs text-muted-foreground mb-2">Try asking:</div>
+            <div className="grid grid-cols-2 gap-2">
+              {SUGGESTED_QUESTIONS.map((q, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handleSuggestedQuestion(q.text)}
+                  className="text-xs p-2 rounded-lg border border-border/30 bg-background/5 hover:bg-primary/10 transition-colors text-left flex items-start gap-2"
+                  disabled={isBlurred || isLoading}
+                >
+                  <q.icon className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                  <span>{q.text}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </CardContent>
 
-      <CardFooter className="pt-0">
-        <form onSubmit={handleSendMessage} className="flex w-full gap-2">
+      <CardFooter className="pt-0 flex-shrink-0">
+        <form onSubmit={handleSubmit} className="flex w-full gap-2">
           <input
             type="text"
             value={message}
@@ -95,154 +210,25 @@ export default function AIAssistant({ isBlurred = false }: AIAssistantProps) {
             )}
             disabled={isBlurred || !hasUploadedStatement || isLoading}
           />
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             className={cn(
-              "rounded-lg border border-border/30 bg-background/10 p-2 px-4 hover:bg-primary hover:text-primary-foreground transition-colors shadow-sm",
-              (isBlurred || !hasUploadedStatement || isLoading) && "cursor-not-allowed opacity-50"
+              "rounded-lg border border-border/30 bg-primary/10 p-2 px-4 hover:bg-primary hover:text-primary-foreground transition-colors shadow-sm flex items-center gap-2",
+              (isBlurred || !hasUploadedStatement || isLoading || !message.trim()) && "cursor-not-allowed opacity-50"
             )}
-            disabled={isBlurred || !hasUploadedStatement || isLoading}
+            disabled={isBlurred || !hasUploadedStatement || isLoading || !message.trim()}
           >
             {isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Send className="h-4 w-4" />
+                <span className="hidden sm:inline">Send</span>
               </>
-            ) : "ASK"}
+            )}
           </button>
         </form>
       </CardFooter>
     </Card>
   );
-}
-
-// Helper function to generate AI responses based on the user query and financial data
-interface FinancialData {
-  totalBalance: string;
-  income: string;
-  expenses: string;
-  incomeTransactions: number;
-  expenseTransactions: number;
-  comparedToLastMonth: string;
-  transactions: Transaction[];
-}
-
-function generateAIResponse(query: string, financialData: FinancialData): string {
-  const lowerQuery = query.toLowerCase().trim();
-  
-  // Create a deterministic hash based on the query to ensure consistent responses
-  const hashCode = (str: string) => {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      hash = ((hash << 5) - hash) + str.charCodeAt(i);
-      hash |= 0;
-    }
-    return hash;
-  };
-  
-  // Generate query fingerprint for deterministic responses
-  const queryFingerprint = lowerQuery.split(' ').sort().join(' ');
-  const queryHash = hashCode(queryFingerprint);
-  
-  // Log for debugging
-  console.log(`Query: "${lowerQuery}", Hash: ${queryHash}`);
-  
-  // Calculate some basic financial metrics for responses
-  const income = parseFloat(financialData.income.replace(/[₹,]/g, '')) || 0;
-  const expenses = parseFloat(financialData.expenses.replace(/[₹,]/g, '')) || 0;
-  const savingsRate = income > 0 ? ((income - expenses) / income) * 100 : 0;
-  
-  // Transaction analysis - ensure deterministic processing by sorting first
-  let largestExpense = { amount: 0, description: "", category: "" };
-  const categories: Record<string, number> = {};
-  
-  // Sort transactions by ID for deterministic processing
-  const sortedTransactions = [...financialData.transactions].sort((a, b) => 
-    a.id.localeCompare(b.id)
-  );
-  
-  sortedTransactions.forEach((transaction: Transaction) => {
-    if (transaction.type === 'debit' && transaction.amount > largestExpense.amount) {
-      largestExpense = transaction;
-    }
-    
-    if (transaction.type === 'debit') {
-      if (!categories[transaction.category]) {
-        categories[transaction.category] = 0;
-      }
-      categories[transaction.category] += transaction.amount;
-    }
-  });
-  
-  // Sort categories by amount - ensure deterministic ordering
-  const sortedCategories = Object.entries(categories)
-    .sort(([keyA, valueA], [keyB, valueB]) => {
-      // First sort by value (descending)
-      const diff = (valueB as number) - (valueA as number);
-      // If values are equal, sort by category name for determinism
-      return diff !== 0 ? diff : keyA.localeCompare(keyB);
-    })
-    .slice(0, 3);
-  
-  // Use predefined response patterns based on query intent
-  if (lowerQuery.includes("balance") || lowerQuery.includes("total") || lowerQuery.match(/how much( money)? do i have/)) {
-    return `Your current balance is ${financialData.totalBalance}. ${
-      parseFloat(financialData.comparedToLastMonth) > 0 
-        ? `This is ${financialData.comparedToLastMonth} more than last month.` 
-        : `This is ${financialData.comparedToLastMonth} less than last month.`
-    }`;
-  } 
-  else if (lowerQuery.includes("income") || lowerQuery.includes("earn") || lowerQuery.includes("salary")) {
-    return `Your total income is ${financialData.income} from ${financialData.incomeTransactions} transactions.`;
-  }
-  else if (lowerQuery.includes("expense") || lowerQuery.includes("spend") || lowerQuery.includes("spending")) {
-    return `Your total expenses are ${financialData.expenses} from ${financialData.expenseTransactions} transactions.`;
-  }
-  else if (lowerQuery.includes("saving") || lowerQuery.includes("save")) {
-    return `Your savings rate is ${savingsRate.toFixed(1)}%. ${
-      savingsRate >= 20 
-        ? "That's good! Financial experts recommend saving at least 20% of your income." 
-        : "Financial experts recommend saving at least 20% of your income. Consider reviewing your expenses to increase your savings."
-    }`;
-  }
-  else if (lowerQuery.includes("budget") || lowerQuery.includes("recommend")) {
-    return `Based on your income of ${financialData.income}, a recommended budget would be:
-    • 50% for needs (₹${(income * 0.5).toLocaleString('en-IN')})
-    • 30% for wants (₹${(income * 0.3).toLocaleString('en-IN')})
-    • 20% for savings (₹${(income * 0.2).toLocaleString('en-IN')})
-    Currently, you're spending about ${((expenses / income) * 100).toFixed(1)}% of your income.`;
-  }
-  else if (lowerQuery.includes("largest") || lowerQuery.includes("biggest") || lowerQuery.includes("highest")) {
-    if (lowerQuery.includes("expense") || lowerQuery.includes("spending") || lowerQuery.includes("transaction")) {
-      return `Your largest expense was ₹${largestExpense.amount.toLocaleString('en-IN')} for "${largestExpense.description}" in the ${largestExpense.category} category.`;
-    } else if (lowerQuery.includes("category") || lowerQuery.includes("categories")) {
-      return `Your top spending categories are: ${
-        sortedCategories.map(([category, amount]) => 
-          `${category}: ₹${(amount as number).toLocaleString('en-IN')}`
-        ).join(', ')
-      }.`;
-    }
-  }
-  else if (lowerQuery.includes("improve") || lowerQuery.includes("better") || lowerQuery.includes("advice")) {
-    if (savingsRate < 20) {
-      return `To improve your finances, consider increasing your savings rate from ${savingsRate.toFixed(1)}% to at least 20%. Focus on reducing expenses in your highest spending categories: ${
-        sortedCategories.slice(0, 2).map(([category]) => category).join(' and ')
-      }.`;
-    } else {
-      return `You're doing well with a savings rate of ${savingsRate.toFixed(1)}%! Consider investing some of your savings for long-term growth or building an emergency fund if you don't already have one.`;
-    }
-  }
-  
-  // For any query that doesn't match predefined patterns, use a deterministic
-  // selection from predefined answers based on the query hash
-  const predefinedResponses = [
-    `I've analyzed your financial data showing a balance of ${financialData.totalBalance}, with income of ${financialData.income} and expenses of ${financialData.expenses}. How else can I help you understand your finances?`,
-    `Based on your statement, you have ${financialData.totalBalance} in your account with ${financialData.incomeTransactions} income transactions and ${financialData.expenseTransactions} expense transactions. Is there anything specific you'd like to know?`,
-    `Your financial summary shows ${financialData.totalBalance} balance, ${financialData.income} income, and ${financialData.expenses} expenses. Let me know if you need more specific insights.`,
-    `I can see that your account has ${financialData.totalBalance}, with monthly income of ${financialData.income} and expenses of ${financialData.expenses}. What other financial information would you like?`,
-    `According to your statement, you have ${financialData.totalBalance} in your account. Your income is ${financialData.income} and your expenses are ${financialData.expenses}. How can I help you further?`
-  ];
-  
-  // Use the query hash to deterministically select a response
-  const responseIndex = Math.abs(queryHash % predefinedResponses.length);
-  return predefinedResponses[responseIndex];
 }

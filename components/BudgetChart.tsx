@@ -1,24 +1,36 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  Area,
+  ComposedChart
+} from "recharts";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { 
-  Select, 
-  SelectContent, 
-  SelectItem, 
-  SelectTrigger, 
-  SelectValue 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import WeekSelector from "./WeekSelector";
 import { useBankStatement } from "@/contexts/BankStatementContext";
 import { Transaction, normalizeTransactionDate, buildBudgetDataFromTransactions } from "@/services/bankStatementService";
-import { CalendarDays, TrendingUp, TrendingDown, BarChart3, Calendar, ArrowUpDown } from "lucide-react";
+import { CalendarDays, TrendingUp, TrendingDown, BarChart3, Calendar, ArrowUpDown, PieChart } from "lucide-react";
 
 type ChartView = 'week' | 'month' | 'balance' | 'comparison' | 'category';
-type ChartType = 'bar' | 'line';
+type ChartType = 'bar' | 'line' | 'area';
 
 interface BudgetChartProps {
   isBlurred?: boolean;
@@ -31,27 +43,21 @@ interface MonthlyData {
   totalIncome: number;
   transactionCount: number;
   averageDaily: number;
-  weeklyData: { week: number; amount: number; transactions: number }[];
-  dailyData: { date: string; amount: number; day: number }[];
+  // Dynamic weekly data
+  weeklyData: { week: number; startDate: string; endDate: string; amount: number; transactions: number; income: number }[];
+  dailyData: { date: string; amount: number; income: number; day: number; fullDate: string }[];
 }
 
-// Helper function to get week number from a date string (format: DD/MM/YYYY)
-function getWeekOfMonth(dateStr: string): number {
-  const dateParts = dateStr.split('/');
-  if (dateParts.length !== 3) return 1;
-  
-  const day = parseInt(dateParts[0], 10);
-  const month = parseInt(dateParts[1], 10) - 1;
-  const year = parseInt(dateParts[2], 10);
-  
-  const date = new Date(year, month, day);
-  const firstDayOfMonth = new Date(year, month, 1);
-  
-  const dayDiff = Math.floor((date.getTime() - firstDayOfMonth.getTime()) / (24 * 60 * 60 * 1000));
-  return Math.floor(dayDiff / 7) + 1;
+// Helper to get week number and range
+function getWeekDetails(date: Date) {
+  const startOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
+  const day = date.getDate();
+  // Simple week calculation: 1-7 = week 1, 8-14 = week 2, etc.
+  const weekNum = Math.ceil(day / 7);
+  return weekNum > 4 ? 4 : weekNum; // Cap at 4 weeks for simplicity in view, or we can allow 5
 }
 
-// Get month name from number
+// Helper function to get month name
 function getMonthName(monthNum: number): string {
   const months = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -60,80 +66,144 @@ function getMonthName(monthNum: number): string {
   return months[monthNum - 1] || 'Unknown';
 }
 
-// Process transactions to get monthly insights (normalize date to DD/MM/YYYY first)
+// Robust parsing of transactions
 function getMonthlyInsights(transactions: Transaction[]): MonthlyData[] {
   const monthlyMap: Record<string, MonthlyData> = {};
-  
+
   transactions.forEach(transaction => {
-    const dateStr = normalizeTransactionDate(transaction.date);
-    const parts = dateStr.split('/').map(Number);
-    if (parts.length < 3) return;
-    const [day, month, year] = parts;
-    const monthKey = `${month}-${year}`;
-    
-    if (!monthlyMap[monthKey]) {
-      monthlyMap[monthKey] = {
-        month: getMonthName(month),
-        year: year,
-        totalExpenses: 0,
-        totalIncome: 0,
-        transactionCount: 0,
-        averageDaily: 0,
-        weeklyData: [
-          { week: 1, amount: 0, transactions: 0 },
-          { week: 2, amount: 0, transactions: 0 },
-          { week: 3, amount: 0, transactions: 0 },
-          { week: 4, amount: 0, transactions: 0 }
-        ],
-        dailyData: []
-      };
-    }
-    
-    const monthData = monthlyMap[monthKey];
-    monthData.transactionCount++;
-    
-    if (transaction.type === 'credit') {
-      monthData.totalIncome += transaction.amount;
-    } else {
-      monthData.totalExpenses += transaction.amount;
-    }
-    
-    // Update weekly data (use normalized date)
-    const weekNum = getWeekOfMonth(dateStr);
-    if (weekNum >= 1 && weekNum <= 4) {
-      if (transaction.type === 'debit') {
-        monthData.weeklyData[weekNum - 1].amount += transaction.amount;
+    try {
+      // Normalize date first
+      const dateStr = normalizeTransactionDate(transaction.date);
+      const parts = dateStr.split('/').map(Number);
+      if (parts.length < 3) return;
+
+      const [day, month, year] = parts;
+      const monthKey = `${month}-${year}`;
+      const txnDate = new Date(year, month - 1, day);
+
+      if (!monthlyMap[monthKey]) {
+        monthlyMap[monthKey] = {
+          month: getMonthName(month),
+          year: year,
+          totalExpenses: 0,
+          totalIncome: 0,
+          transactionCount: 0,
+          averageDaily: 0,
+          weeklyData: Array(5).fill(0).map((_, i) => ({
+            week: i + 1,
+            startDate: '', // Can calculate dynamic ranges if needed
+            endDate: '',
+            amount: 0,
+            transactions: 0,
+            income: 0
+          })),
+          dailyData: []
+        };
       }
-      monthData.weeklyData[weekNum - 1].transactions++;
-    }
-    
-    // Update daily data
-    const existingDay = monthData.dailyData.find(d => d.day === day);
-    if (existingDay) {
-      if (transaction.type === 'debit') {
-        existingDay.amount += transaction.amount;
+
+      const monthData = monthlyMap[monthKey];
+      monthData.transactionCount++;
+      const amount = Math.abs(transaction.amount); // Ensure positive for charts
+
+      if (transaction.type === 'credit') {
+        monthData.totalIncome += amount;
+      } else {
+        monthData.totalExpenses += amount;
       }
-    } else {
-      monthData.dailyData.push({
-        date: `${day}/${month}`,
-        amount: transaction.type === 'debit' ? transaction.amount : 0,
-        day: day
-      });
+
+      // Weekly Data updates
+      // Using simple 4-week bucket for consistent UI, blending 5th week into 4th or showing 5
+      // Let's use 5 weeks to be accurate
+      const weekNum = Math.ceil(day / 7);
+      const targetWeek = weekNum > 5 ? 5 : weekNum;
+
+      if (transaction.type === 'debit') {
+        monthData.weeklyData[targetWeek - 1].amount += amount;
+      } else {
+        monthData.weeklyData[targetWeek - 1].income += amount;
+      }
+      monthData.weeklyData[targetWeek - 1].transactions++;
+
+      // Daily Data updates
+      const existingDay = monthData.dailyData.find(d => d.day === day);
+      if (existingDay) {
+        if (transaction.type === 'debit') {
+          existingDay.amount += amount;
+        } else {
+          existingDay.income += amount;
+        }
+      } else {
+        monthData.dailyData.push({
+          date: `${day}/${month}`,
+          fullDate: dateStr,
+          amount: transaction.type === 'debit' ? amount : 0,
+          income: transaction.type === 'credit' ? amount : 0,
+          day: day
+        });
+      }
+
+    } catch (e) {
+      console.warn("Error parsing transaction date:", transaction.date);
     }
   });
-  
-  // Calculate averages and sort daily data
+
+  // Post-process: Sort days and calc averages
   Object.values(monthlyMap).forEach(monthData => {
-    const daysInMonth = monthData.dailyData.length;
-    monthData.averageDaily = daysInMonth > 0 ? monthData.totalExpenses / daysInMonth : 0;
     monthData.dailyData.sort((a, b) => a.day - b.day);
+    const daysWithTxn = monthData.dailyData.length || 1;
+    monthData.averageDaily = monthData.totalExpenses / 30; // Approx monthly avg
+
+    // Filter out empty weeks if using 5
+    monthData.weeklyData = monthData.weeklyData.filter(w => w.amount > 0 || w.income > 0 || w.transactions > 0);
   });
-  
+
+  // Sort months descending (newest first)
   return Object.values(monthlyMap).sort((a, b) => {
     if (a.year !== b.year) return b.year - a.year;
-    return b.month.localeCompare(a.month);
+    // Month name to number roughly, or simpler: just use key comparison if we had it, 
+    // but the object is built randomly.
+    // Let's rely on the parsing of Month Name back to number if needed, or better, 
+    // since we don't store month Num in the object except implicitly. 
+    // Actually we parse month name. Let's add better sorting.
+    // Ideally we stored 'monthNum' in MonthlyData. Let's fix that next time.
+    // For now, simple string compare might be wrong for months.
+    return 0; // The previous logic was also slightly flawed.
+  }).sort((a, b) => {
+    // Robust Sort
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    return (b.year * 12 + months.indexOf(b.month)) - (a.year * 12 + months.indexOf(a.month));
   });
 }
+
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    return (
+      <div className="bg-black/80 backdrop-blur-md border border-white/10 p-4 rounded-xl shadow-2xl">
+        <p className="text-gray-400 text-xs mb-2 font-medium uppercase tracking-wider">{label}</p>
+
+        {payload.map((entry: any, index: number) => (
+          <div key={index} className="flex items-center gap-3 mb-1 last:mb-0">
+            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
+            <span className="text-sm font-medium text-gray-200 capitalize">
+              {entry.name === 'amount' ? 'Expenses' : entry.name}:
+            </span>
+            <span className="text-sm font-bold text-white ml-auto">
+              ₹{Number(entry.value).toLocaleString('en-IN')}
+            </span>
+          </div>
+        ))}
+
+        {data.transactions !== undefined && (
+          <div className="mt-2 pt-2 border-t border-white/10 text-xs text-gray-400">
+            {data.transactions} transactions
+          </div>
+        )}
+      </div>
+    );
+  }
+  return null;
+};
 
 export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
   const [activeView, setActiveView] = useState<ChartView>('month');
@@ -143,390 +213,269 @@ export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
   const [comparisonMonth, setComparisonMonth] = useState<string>('previous');
   const { financialData, hasUploadedStatement } = useBankStatement();
 
-  // Get monthly insights from transactions
   const monthlyInsights = useMemo(() => {
     if (!hasUploadedStatement || !financialData.transactions) return [];
     return getMonthlyInsights(financialData.transactions);
   }, [financialData.transactions, hasUploadedStatement]);
 
-  // Get current month data
   const currentMonthData = useMemo(() => {
     if (monthlyInsights.length === 0) return null;
-    
-    if (selectedMonth === 'current') {
-      return monthlyInsights[0];
-    } else {
-      return monthlyInsights.find(m => `${m.month}-${m.year}` === selectedMonth) || monthlyInsights[0];
-    }
+    if (selectedMonth === 'current') return monthlyInsights[0];
+    return monthlyInsights.find(m => `${m.month}-${m.year}` === selectedMonth) || monthlyInsights[0];
   }, [monthlyInsights, selectedMonth]);
 
-  // Category-wise spending from real transactions
-  const categoryChartData = useMemo(() => {
-    if (!hasUploadedStatement || !financialData.transactions?.length) return [];
-    const { byCategory } = buildBudgetDataFromTransactions(financialData.transactions);
-    return byCategory.map((c) => ({ name: c.name, amount: c.amount }));
-  }, [hasUploadedStatement, financialData.transactions]);
-
-  // Generate chart data based on the view
   const chartData = useMemo(() => {
     if (activeView === "category") {
-      return categoryChartData;
+      if (!hasUploadedStatement || !financialData.transactions?.length) return [];
+      const { byCategory } = buildBudgetDataFromTransactions(financialData.transactions);
+      return byCategory.map((c) => ({ name: c.name, amount: c.amount, transactions: 0 }));
     }
-    if (!hasUploadedStatement || !currentMonthData) {
-      return [];
-    }
-    
+
+    if (!currentMonthData) return [];
+
     switch (activeView) {
       case 'week':
         return currentMonthData.weeklyData.map(week => ({
           name: `Week ${week.week}`,
           amount: week.amount,
+          income: week.income,
           transactions: week.transactions
         }));
-        
+
       case 'month':
         return currentMonthData.dailyData.map(day => ({
           name: day.date,
-          amount: day.amount
+          amount: day.amount,
+          income: day.income,
+          fullDate: day.fullDate
         }));
-        
+
       case 'balance':
-        // Show running balance over the month
-        let runningBalance = 0;
+        let balance = 0;
         return currentMonthData.dailyData.map(day => {
-          runningBalance += day.amount;
+          balance += (day.income - day.amount);
           return {
             name: day.date,
-            amount: runningBalance
+            amount: balance,
+            income: day.income,
+            expense: day.amount
           };
         });
-        
+
       case 'comparison':
         if (monthlyInsights.length < 2) return [];
-        
-        const compMonth = monthlyInsights.find(m => `${m.month}-${m.year}` === comparisonMonth) || monthlyInsights[1];
-        
-        // Compare weekly data
-        return currentMonthData.weeklyData.map((week, index) => ({
+        const comp = monthlyInsights.find(m => `${m.month}-${m.year}` === comparisonMonth) || monthlyInsights[1];
+        // Compare weeks
+        return currentMonthData.weeklyData.map((week, idx) => ({
           name: `Week ${week.week}`,
           current: week.amount,
-          comparison: compMonth.weeklyData[index]?.amount || 0
+          comparison: comp?.weeklyData[idx]?.amount || 0
         }));
-        
+
       default:
         return [];
     }
-  }, [activeView, currentMonthData, monthlyInsights, comparisonMonth, hasUploadedStatement, categoryChartData]);
+  }, [activeView, currentMonthData, monthlyInsights, comparisonMonth, hasUploadedStatement, financialData]);
 
-  // Handle week selection
-  const handleWeekSelect = (week: number) => {
-    if (!isBlurred) {
-      setActiveWeek(week);
-      setActiveView('week');
-    }
-  };
-
-  // Custom tooltip formatter
-  const formatTooltipValue = (value: number, name?: string) => {
-    if (name === 'transactions') return `${value} transactions`;
-    return `₹${value.toLocaleString('en-IN')}`;
-  };
-
-  // Get insights text
-  const getInsights = () => {
+  // Calculations for Insight Cards
+  const insights = useMemo(() => {
     if (!currentMonthData) return null;
-    
-    const avgDaily = currentMonthData.averageDaily;
-    const totalExpenses = currentMonthData.totalExpenses;
-    const totalIncome = currentMonthData.totalIncome;
-    const netSavings = totalIncome - totalExpenses;
-    
+    const net = currentMonthData.totalIncome - currentMonthData.totalExpenses;
+    const rate = currentMonthData.totalIncome > 0 ? (net / currentMonthData.totalIncome) * 100 : 0;
+
     return {
-      avgDaily,
-      totalExpenses,
-      totalIncome,
-      netSavings,
-      savingsRate: totalIncome > 0 ? ((netSavings / totalIncome) * 100) : 0
+      daily: currentMonthData.averageDaily,
+      expense: currentMonthData.totalExpenses,
+      income: currentMonthData.totalIncome,
+      savings: rate
     };
-  };
+  }, [currentMonthData]);
 
-  const insights = getInsights();
-
+  // Render content
   return (
     <Card className={cn(
-      "bg-background/10 backdrop-blur-sm border-border/30 w-full transition-all shadow-md hover:shadow-lg h-full",
+      "bg-background/10 backdrop-blur-sm border-border/30 w-full transition-all shadow-md hover:shadow-lg h-full flex flex-col",
       isBlurred && "hover:opacity-60"
     )}>
-      <CardHeader className="pb-0">
+      <CardHeader className="pb-2">
         <div className="flex flex-col gap-4">
-          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
-            <CardTitle className="text-lg font-medium">COMPARING OF BUDGET</CardTitle>
-            
+          <div className="flex justify-between items-center">
+            <CardTitle className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">
+              Analytics Dashboard
+            </CardTitle>
+
             {/* Chart Type Toggle */}
-            <div className="flex items-center gap-2">
-              <Button
-                variant={chartType === 'bar' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setChartType('bar')}
-                disabled={isBlurred}
-              >
-                <BarChart3 className="h-4 w-4 mr-1" />
-                Bar
-              </Button>
-              <Button
-                variant={chartType === 'line' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setChartType('line')}
-                disabled={isBlurred}
-              >
-                <TrendingUp className="h-4 w-4 mr-1" />
-                Line
-              </Button>
+            <div className="flex bg-background/20 rounded-lg p-1 border border-border/20">
+              {(['bar', 'line', 'area'] as ChartType[]).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setChartType(t)}
+                  disabled={isBlurred}
+                  className={cn(
+                    "px-3 py-1 text-xs rounded-md capitalize transition-all",
+                    chartType === t
+                      ? "bg-primary text-primary-foreground shadow-sm font-medium"
+                      : "text-muted-foreground hover:bg-white/5"
+                  )}
+                >
+                  {t}
+                </button>
+              ))}
             </div>
           </div>
-          
-          {/* View Selection Buttons */}
-          <div className="flex flex-wrap gap-2">
-            {[
-              { label: 'Week View', active: activeView === 'week', onClick: () => setActiveView('week') },
-              { label: 'Month View', active: activeView === 'month', onClick: () => setActiveView('month') },
-              { label: 'Balance', active: activeView === 'balance', onClick: () => setActiveView('balance') },
-              { label: 'Compare', active: activeView === 'comparison', onClick: () => setActiveView('comparison'), icon: <ArrowUpDown className="h-4 w-4 mr-1" /> },
-            ].map((btn, idx) => (
-              <button
-                key={btn.label}
-                onClick={btn.onClick}
-                className={cn(
-                  "relative px-6 py-2 font-semibold rounded-xl border border-border/40 bg-background/20 text-white transition-all duration-300 overflow-hidden",
-                  btn.active ? "scale-105 shadow-lg z-10" : "hover:scale-105",
-                  "liquid-effect"
-                )}
-                style={{
-                  borderRadius: btn.active ? '2rem' : '1rem',
-                }}
-              >
-                <span className="relative z-10 flex items-center justify-center">
-                  {btn.icon}
-                  {btn.label}
-                </span>
-                {/* Liquid animation overlay */}
-                <span className="absolute inset-0 liquid-anim" />
-              </button>
-            ))}
-          </div>
-          
-          {/* Month Selection */}
+
+          {/* Controls */}
           {!isBlurred && monthlyInsights.length > 0 && (
-            <div className="flex flex-col sm:flex-row gap-4">
-              <div className="flex items-center gap-2">
-                <Calendar className="h-4 w-4" />
-                <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-                  <SelectTrigger className="w-48 bg-background/10 border-border/30">
-                    <SelectValue placeholder="Select month" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="current">Current Month</SelectItem>
-                    {monthlyInsights.map((month, index) => (
-                      <SelectItem key={index} value={`${month.month}-${month.year}`}>
-                        {month.month} {month.year}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              
-              {activeView === 'comparison' && (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-muted-foreground">vs</span>
-                  <Select value={comparisonMonth} onValueChange={setComparisonMonth}>
-                    <SelectTrigger className="w-48 bg-background/10 border-border/30">
-                      <SelectValue placeholder="Compare with" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="previous">Previous Month</SelectItem>
-                      {monthlyInsights.map((month, index) => (
-                        <SelectItem key={index} value={`${month.month}-${month.year}`}>
-                          {month.month} {month.year}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
+            <div className="flex flex-wrap gap-2 items-center">
+              <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+                <SelectTrigger className="h-8 w-[140px] text-xs bg-background/20 border-border/20">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="current">Current Month</SelectItem>
+                  {monthlyInsights.map((m, i) => (
+                    <SelectItem key={i} value={`${m.month}-${m.year}`}>
+                      {m.month} {m.year}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <div className="h-4 w-px bg-border/30 mx-2" />
+
+              {(['week', 'month', 'balance', 'comparison', 'category'] as ChartView[]).map(v => (
+                <button
+                  key={v}
+                  onClick={() => setActiveView(v)}
+                  className={cn(
+                    "px-3 py-1.5 text-xs rounded-full border transition-all duration-200",
+                    activeView === v
+                      ? "bg-blue-500/10 border-blue-500/50 text-blue-400 shadow-[0_0_10px_rgba(59,130,246,0.2)]"
+                      : "bg-transparent border-transparent text-muted-foreground hover:bg-white/5"
+                  )}
+                >
+                  {v.charAt(0).toUpperCase() + v.slice(1)}
+                </button>
+              ))}
             </div>
           )}
-          
-          {/* Insights Cards */}
+
+          {/* Insight Cards */}
           {insights && !isBlurred && (
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-background/20 p-3 rounded-lg border border-border/20">
-                <div className="flex items-center gap-2">
-                  <CalendarDays className="h-4 w-4 text-blue-400" />
-                  <span className="text-xs text-muted-foreground">Avg Daily</span>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-1">
+              {[
+                { label: 'Total Income', val: insights.income, color: 'text-emerald-400', icon: TrendingUp },
+                { label: 'Total Expenses', val: insights.expense, color: 'text-rose-400', icon: TrendingDown },
+                { label: 'Daily Average', val: insights.daily, color: 'text-blue-400', icon: CalendarDays },
+                { label: 'Savings Rate', val: insights.savings, suffix: '%', color: 'text-purple-400', icon: PieChart },
+              ].map((item, i) => (
+                <div key={i} className="bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 rounded-xl p-3 flex flex-col relative overflow-hidden group">
+                  <div className="absolute top-0 right-0 w-16 h-16 bg-white/5 rounded-full -mr-8 -mt-8 blur-xl group-hover:bg-white/10 transition-all" />
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-widest mb-1">{item.label}</span>
+                  <div className="flex items-center gap-2 z-10">
+                    <item.icon className={cn("h-4 w-4", item.color)} />
+                    <span className="text-lg font-bold text-white">
+                      {item.suffix ? item.val.toFixed(1) + '%' : `₹${item.val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
+                    </span>
+                  </div>
                 </div>
-                <p className="text-sm font-semibold">₹{insights.avgDaily.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</p>
-              </div>
-              
-              <div className="bg-background/20 p-3 rounded-lg border border-border/20">
-                <div className="flex items-center gap-2">
-                  <TrendingDown className="h-4 w-4 text-red-400" />
-                  <span className="text-xs text-muted-foreground">Total Expenses</span>
-                </div>
-                <p className="text-sm font-semibold">₹{insights.totalExpenses.toLocaleString('en-IN')}</p>
-              </div>
-              
-              <div className="bg-background/20 p-3 rounded-lg border border-border/20">
-                <div className="flex items-center gap-2">
-                  <TrendingUp className="h-4 w-4 text-green-400" />
-                  <span className="text-xs text-muted-foreground">Total Income</span>
-                </div>
-                <p className="text-sm font-semibold">₹{insights.totalIncome.toLocaleString('en-IN')}</p>
-              </div>
-              
-              <div className="bg-background/20 p-3 rounded-lg border border-border/20">
-                <div className="flex items-center gap-2">
-                  <BarChart3 className="h-4 w-4 text-purple-400" />
-                  <span className="text-xs text-muted-foreground">Savings Rate</span>
-                </div>
-                <p className="text-sm font-semibold">{insights.savingsRate.toFixed(1)}%</p>
-              </div>
+              ))}
             </div>
           )}
         </div>
       </CardHeader>
-      
-      <CardContent>
-        <div className={cn("w-full h-[280px] md:h-[320px]", isBlurred && "blur-sm select-none")}>
-          {!hasUploadedStatement ? (
-            <div className="h-full flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <Calendar className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>Upload a bank statement to view budget data</p>
+
+      <CardContent className="flex-1 min-h-[300px] p-2 pt-4">
+        <div className={cn("w-full h-full", isBlurred && "blur-md opacity-50")}>
+          {!hasUploadedStatement || chartData.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-muted-foreground flex-col gap-3">
+              <div className="bg-white/5 p-4 rounded-full">
+                <BarChart3 className="h-8 w-8 opacity-40" />
               </div>
-            </div>
-          ) : chartData.length === 0 ? (
-            <div className="h-full flex items-center justify-center flex-col text-muted-foreground">
-              <p>No data available for the selected period</p>
-              <p className="text-sm mt-2">Try selecting a different month or view</p>
+              <p className="text-sm">No analytics data available</p>
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              {chartType === 'bar' ? (
-                <BarChart
-                  key={activeView === 'category' ? 'category' : 'default'}
-                  data={chartData}
-                  margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
-                >
-                  <CartesianGrid stroke="rgba(255, 255, 255, 0.1)" vertical={false} />
-                  <XAxis 
-                    dataKey="name" 
-                    stroke="rgba(255, 255, 255, 0.5)"
-                    fontSize={12}
+              <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorIncome" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="colorExpense" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0.4} />
+                  </linearGradient>
+                  <linearGradient id="colorComparison" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0.4} />
+                  </linearGradient>
+                </defs>
+
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                <XAxis
+                  dataKey="name"
+                  stroke="#666"
+                  fontSize={10}
+                  tickLine={false}
+                  axisLine={false}
+                  dy={10}
+                />
+                <YAxis
+                  stroke="#666"
+                  fontSize={10}
+                  tickFormatter={(val) => `₹${(val / 1000).toFixed(0)}k`}
+                  tickLine={false}
+                  axisLine={false}
+                  dx={-10}
+                />
+                <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.05)' }} />
+
+                {/* Render Logic based on view */}
+                {activeView === 'comparison' ? (
+                  <>
+                    <Bar dataKey="current" name="Current" fill="url(#colorExpense)" radius={[4, 4, 0, 0]} barSize={20} />
+                    <Bar dataKey="comparison" name="Previous" fill="url(#colorComparison)" radius={[4, 4, 0, 0]} barSize={20} />
+                  </>
+                ) : activeView === 'balance' ? (
+                  <Area
+                    type="monotone"
+                    dataKey="amount"
+                    stroke="#8b5cf6"
+                    fill="url(#colorExpense)"
+                    strokeWidth={3}
                   />
-                  <YAxis 
-                    stroke="rgba(255, 255, 255, 0.5)" 
-                    tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}k`}
-                    fontSize={12}
-                  />
-                  <Tooltip 
-                    formatter={(value, name) => formatTooltipValue(Number(value), name as string)}
-                    contentStyle={{ 
-                      backgroundColor: 'rgba(0, 0, 0, 0.8)', 
-                      border: '1px solid rgba(255, 255, 255, 0.2)',
-                      color: 'white',
-                      borderRadius: '8px',
-                      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)'
-                    }}
-                  />
-                  {activeView === 'comparison' ? (
-                    <>
-                      <Bar dataKey="current" fill="#3b82f6" radius={[2, 2, 0, 0]} name="Current" />
-                      <Bar dataKey="comparison" fill="#ef4444" radius={[2, 2, 0, 0]} name="Previous" />
-                    </>
-                  ) : (
-                    <Bar 
-                      dataKey="amount" 
-                      fill={activeView === "category" ? "#8b5cf6" : "#3b82f6"}
-                      radius={[4, 4, 0, 0]}
-                      animationDuration={1000}
-                    />
-                  )}
-                </BarChart>
-              ) : (
-                <LineChart
-                  data={chartData}
-                  margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
-                >
-                  <CartesianGrid stroke="rgba(255, 255, 255, 0.1)" />
-                  <XAxis 
-                    dataKey="name" 
-                    stroke="rgba(255, 255, 255, 0.5)"
-                    fontSize={12}
-                  />
-                  <YAxis 
-                    stroke="rgba(255, 255, 255, 0.5)" 
-                    tickFormatter={(value) => `₹${(value / 1000).toFixed(0)}k`}
-                    fontSize={12}
-                  />
-                  <Tooltip 
-                    formatter={(value, name) => formatTooltipValue(Number(value), name as string)}
-                    contentStyle={{ 
-                      backgroundColor: 'rgba(0, 0, 0, 0.8)', 
-                      border: '1px solid rgba(255, 255, 255, 0.2)',
-                      color: 'white',
-                      borderRadius: '8px',
-                      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)'
-                    }}
-                  />
-                  {activeView === 'comparison' ? (
-                    <>
-                      <Line 
-                        type="monotone" 
-                        dataKey="current" 
-                        stroke="#3b82f6" 
-                        strokeWidth={3}
-                        dot={{ fill: '#3b82f6', strokeWidth: 2, r: 4 }}
-                        name="Current"
-                      />
-                      <Line 
-                        type="monotone" 
-                        dataKey="comparison" 
-                        stroke="#ef4444" 
-                        strokeWidth={3}
-                        dot={{ fill: '#ef4444', strokeWidth: 2, r: 4 }}
-                        name="Previous"
-                      />
-                    </>
-                  ) : (
-                    <Line 
-                      type="monotone" 
-                      dataKey="amount" 
-                      stroke={activeView === "category" ? "#8b5cf6" : "#3b82f6"}
+                ) : (
+                  chartType === 'line' ? (
+                    <Line
+                      type="monotone"
+                      dataKey="amount"
+                      stroke="#3b82f6"
                       strokeWidth={3}
-                      dot={{ fill: activeView === "category" ? "#8b5cf6" : "#3b82f6", strokeWidth: 2, r: 4 }}
-                      animationDuration={1000}
+                      dot={{ r: 4, strokeWidth: 2, fill: '#1e1e1e' }}
+                      activeDot={{ r: 6, fill: '#60a5fa' }}
                     />
-                  )}
-                </LineChart>
-              )}
+                  ) : chartType === 'area' ? (
+                    <Area
+                      type="monotone"
+                      dataKey="amount"
+                      stroke="#3b82f6"
+                      fill="url(#colorExpense)"
+                    />
+                  ) : (
+                    <Bar
+                      dataKey="amount"
+                      fill="url(#colorExpense)"
+                      radius={[6, 6, 0, 0]}
+                      barSize={30}
+                    />
+                  )
+                )}
+
+              </ComposedChart>
             </ResponsiveContainer>
           )}
         </div>
-        
-        {/* Week Selector */}
-        {activeView === 'week' && (
-          <div className={cn("flex justify-center space-x-2 mt-4", isBlurred && "blur-sm select-none")}>
-            {[1, 2, 3, 4].map(week => (
-              <WeekSelector 
-                key={week}
-                week={week} 
-                isActive={activeWeek === week} 
-                onClick={() => handleWeekSelect(week)} 
-                disabled={isBlurred || !hasUploadedStatement} 
-              />
-            ))}
-          </div>
-        )}
       </CardContent>
     </Card>
   );

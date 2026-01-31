@@ -14,7 +14,9 @@ import { UniversalBankStatementParser } from "./universalBankStatementParser";
 
 // Gemini API key
 const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+// Use gemini-flash-latest (stable alias)
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
+
 
 interface GeminiResponse {
   candidates: Array<{
@@ -38,14 +40,14 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
           console.log("Successfully parsed using Universal parser");
           return universalResult;
         }
-        
+
         console.log("Universal parser failed, trying advanced parser...");
         const advancedResult = IndianBankStatementParser.parseStatement(textContent);
         if (advancedResult) {
           console.log("Successfully parsed using advanced parser");
           return advancedResult;
         }
-        
+
         // Try simple fallback parser if both fail
         console.log("Advanced parser failed, trying simple parser...");
         const fallbackResult = parseIndianBankStatement(textContent);
@@ -56,35 +58,35 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
       }
       throw new Error("No API key available and all parsers failed");
     }
-    
+
     console.log("🔄 Starting fresh Gemini analysis (caching disabled)");
-    
+
     // Use the provided extracted text (already extracted in bankStatementService)
     if (!textContent) {
       throw new Error("No extracted text provided");
     }
-    
+
     // Validate that the text is not binary data
     console.log("🔍 Validating extracted text is not binary data...");
     const binaryMarkers = ['%PDF', '/Type', '/Info', 'endobj', 'stream', '/Length', '/Filter', '<<', '>>', 'obj'];
     const hasBinaryMarkers = binaryMarkers.some(marker => textContent.includes(marker));
-    
+
     if (hasBinaryMarkers) {
       console.error("🚨 CRITICAL: Binary PDF data detected in extracted text!");
       console.log("Text preview:", textContent.substring(0, 200));
       throw new Error("Binary PDF data detected - text extraction failed. Will use fallback parsers.");
     }
-    
+
     // Additional validation for readable text
     const readableCharRegex = /[a-zA-Z0-9\s.,₹$]/;
     const readableChars = textContent.match(readableCharRegex);
     const readabilityRatio = readableChars ? readableChars.length / textContent.length : 0;
-    
+
     if (readabilityRatio < 0.3) {
       console.warn("⚠️ Text appears to be corrupted or low quality (readability: " + Math.round(readabilityRatio * 100) + "%)");
       console.log("Will attempt processing but may fall back to parsers...");
     }
-    
+
     console.log("=== EXTRACTED PDF TEXT ===");
     console.log("Length:", textContent.length, "characters");
     console.log("Readability:", Math.round(readabilityRatio * 100) + "%");
@@ -93,7 +95,7 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
 
     // Add a timestamp to ensure fresh analysis each time
     const timestamp = Date.now();
-    
+
     // Prepare the prompt for Gemini - enhanced for COMPREHENSIVE real bank statement analysis
     const prompt = `
       COMPREHENSIVE BANK STATEMENT ANALYSIS - EXTRACT ALL REAL DATA
@@ -333,7 +335,7 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
             threshold: "BLOCK_NONE"
           },
           {
-            category: "HARM_CATEGORY_HATE_SPEECH", 
+            category: "HARM_CATEGORY_HATE_SPEECH",
             threshold: "BLOCK_NONE"
           },
           {
@@ -349,7 +351,7 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
     });
 
     console.log(`⏱️ Gemini API response status: ${response.status}`);
-    
+
     if (!response.ok) {
       const errorText = await response.text();
       console.error("🚨 Gemini API Error:", errorText);
@@ -366,15 +368,15 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
       console.log("=== RAW GEMINI RESPONSE ===");
       console.log(jsonResponse);
       console.log("=== END GEMINI RESPONSE ===");
-      
+
       // Clean up the response and extract JSON
       const cleanedResponse = jsonResponse.replace(/^[^{]*?({[\s\S]*})[^}]*$/, '$1');
-      
+
       // Additional cleanup for any markdown or code block markers
       const noMarkdown = cleanedResponse
         .replace(/```(?:json)?\n?([\s\S]*?)\n?```/g, '$1')
         .trim();
-      
+
       // Attempt to parse the cleaned JSON
       try {
         parsedData = JSON.parse(noMarkdown);
@@ -387,12 +389,12 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
         }
         parsedData = JSON.parse(jsonMatch[0]);
       }
-      
+
       // Validate the parsed data has the required structure
       if (!parsedData || typeof parsedData !== 'object') {
         throw new Error("Invalid JSON structure");
       }
-      
+
       // Ensure all required fields are present and have correct types
       const requiredFields = [
         'totalBalance',
@@ -402,7 +404,7 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
         'expenseTransactions',
         'transactions'
       ];
-      
+
       for (const field of requiredFields) {
         if (!(field in parsedData)) {
           console.warn(`Missing field: ${field}, using default value`);
@@ -426,7 +428,7 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
           }
         }
       }
-      
+
       // Validate, fix, and normalize transaction data (real data only)
       if (Array.isArray(parsedData.transactions)) {
         parsedData.transactions = parsedData.transactions.map((transaction: any, index: number) => {
@@ -460,7 +462,7 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
       parsedData.budgetData = daily;
 
       console.log("Successfully parsed and validated Gemini response (totals from real transactions)");
-      
+
     } catch (parseError) {
       console.error("Error parsing Gemini response:", parseError);
       console.log("Raw response:", jsonResponse);
@@ -468,25 +470,25 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
     }
 
     // Check if Gemini detected binary/corrupted data and returned empty results
-    if (parsedData.transactions && Array.isArray(parsedData.transactions) && 
-        parsedData.transactions.length === 0 && 
-        (parsedData.totalBalance === 0 || parsedData.totalBalance === "₹0" || !parsedData.totalBalance)) {
-      
+    if (parsedData.transactions && Array.isArray(parsedData.transactions) &&
+      parsedData.transactions.length === 0 &&
+      (parsedData.totalBalance === 0 || parsedData.totalBalance === "₹0" || !parsedData.totalBalance)) {
+
       console.warn("⚠️ Gemini returned empty results - likely due to PDF binary data being sent instead of extracted text");
       console.log("Checking if extracted text contained binary markers...");
-      
+
       // Check if the text contained PDF binary markers
-      const hasBinaryMarkers = textContent.includes('%PDF') || 
-                              textContent.includes('/Type') || 
-                              textContent.includes('endobj') ||
-                              textContent.includes('stream');
-      
+      const hasBinaryMarkers = textContent.includes('%PDF') ||
+        textContent.includes('/Type') ||
+        textContent.includes('endobj') ||
+        textContent.includes('stream');
+
       if (hasBinaryMarkers) {
         console.error("🚨 CRITICAL: PDF binary data was sent to Gemini instead of extracted text!");
         console.log("Text preview:", textContent.substring(0, 200));
         throw new Error("PDF text extraction failed - binary data detected. Will use emergency fallback.");
       }
-      
+
       console.log("No binary markers found, but Gemini still returned empty results. Text may be corrupted or unreadable.");
       throw new Error("Gemini could not extract meaningful data from the PDF text. Will use emergency fallback.");
     }
@@ -504,21 +506,21 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
       accountDetails: parsedData.accountDetails,
       statementPeriod: parsedData.statementPeriod
     };
-    
+
     console.log("Formatted data for application:", {
       transactionCount: formattedData.transactions.length,
       totalBalance: formattedData.totalBalance,
       income: formattedData.income,
       expenses: formattedData.expenses
     });
-    
+
     // Return fresh results (no caching)
     console.log("✅ Fresh Gemini analysis completed");
-    
+
     return formattedData;
   } catch (error) {
     console.error("Error analyzing statement with Gemini:", error);
-    
+
     // Try advanced fallback parser first
     console.log("Attempting fallback parsing in order: Universal -> Advanced -> Simple...");
     try {
@@ -529,14 +531,14 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
           console.log("Successfully parsed using Universal parser");
           return universalResult;
         }
-        
+
         console.log("Universal parser failed, trying advanced parser...");
         const advancedResult = IndianBankStatementParser.parseStatement(textContent);
         if (advancedResult) {
           console.log("Successfully parsed using advanced parser");
           return advancedResult;
         }
-        
+
         // Try simple fallback parser if both fail
         console.log("Advanced parser failed, trying simple parser...");
         const fallbackResult = parseIndianBankStatement(textContent);
@@ -548,7 +550,7 @@ export async function analyzeStatementWithGemini(textContent: string, file?: Fil
     } catch (fallbackError) {
       console.error("All fallback parsers failed:", fallbackError);
     }
-    
+
     return null;
   }
 }
