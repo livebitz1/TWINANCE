@@ -16,9 +16,14 @@ import { Toaster } from "@/components/ui/toaster";
 function DashboardContent() {
   const { hasUploadedStatement, setHasUploadedStatement, financialData } = useBankStatement();
 
+  // h-screen, not min-h-screen, on the root element below: a percentage height
+  // ("h-full" on its child) can only resolve against an ancestor with a
+  // *definite* height, and min-height does not count as one. With min-height
+  // here, "h-full flex flex-col" had no real height to fill, so it just sized to
+  // its own content instead - which meant "flex-1 overflow-y-auto" never became
+  // a bounded scroll region and the whole document scrolled natively instead.
   return (
-    
-    <div className="min-h-screen bg-background">
+    <div className="h-screen bg-background">
       <div className="h-full flex flex-col">
         {/* Fixed top bar with padding */}
         <div className="sticky top-0 z-10 bg-background/70 backdrop-blur-md px-6 py-4 border-b border-border/30 shadow-md">
@@ -83,12 +88,27 @@ function DashboardContent() {
                 </div>
 
                 {/* Charts and Insights Section */}
+                {/* Each card sits in its own height-bounded wrapper rather than
+                    inheriting a height from the grid row: a grid container with a
+                    fixed height does not actually force its (default auto-sized)
+                    rows to share that height evenly, so that wouldn't have bounded
+                    the stacked mobile layout correctly. An explicit height per
+                    wrapper works the same way at every breakpoint. Without it, the
+                    AI chat's message list (which would otherwise have no ancestor
+                    to bound it) grows the whole card as replies come in instead of
+                    scrolling, and on the lg: two-column layout the chart card -
+                    stretched to match via the grid's default row-stretch - grows
+                    right along with it, stretching its bars taller and taller. */}
                 <div className="grid gap-6 lg:grid-cols-2">
                   {/* Budget Chart */}
-                  <BudgetChart isBlurred={!hasUploadedStatement} />
+                  <div className="h-[600px]">
+                    <BudgetChart isBlurred={!hasUploadedStatement} />
+                  </div>
 
                   {/* AI Assistant */}
-                  <AIAssistant isBlurred={!hasUploadedStatement} />
+                  <div className="h-[600px]">
+                    <AIAssistant isBlurred={!hasUploadedStatement} />
+                  </div>
                 </div>
 
                 {/* AI Insights - Temporarily disabled */}

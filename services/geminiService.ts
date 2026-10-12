@@ -7,550 +7,385 @@ import {
   recalculateSummaryFromTransactions,
   buildBudgetDataFromTransactions,
 } from "./bankStatementService";
-import { extractTextFromPDF } from "../utils/pdfUtils";
 import { IndianBankStatementParser } from "./advancedBankStatementParser";
 import { parseIndianBankStatement } from "./bankStatementParser";
 import { UniversalBankStatementParser } from "./universalBankStatementParser";
 
-// Gemini API key
-const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-// Use gemini-flash-latest (stable alias)
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
+// Requests go through this app's own server route, which holds the API key.
+// Calling Google directly from here would require a NEXT_PUBLIC_ key, and that
+// prefix ships the key to every visitor's browser.
+const GEMINI_PROXY_URL = "/api/gemini-chat";
 
+// Tuning knobs for extraction speed.
+// Output tokens dominate latency, so transactions are emitted as compact pipe-delimited
+// rows instead of verbose JSON objects, and long statements are split across parallel
+// requests so wall time stays flat as the statement grows.
+// Every chunk costs one API request, and the Gemini free tier allows only 20
+// requests per day, so chunking is deliberately conservative: a normal monthly
+// statement stays a single request, and only genuinely long statements split.
+const MAX_PARALLEL_CHUNKS = 6;
+const MIN_TXN_LINES_PER_CHUNK = 40;
 
-interface GeminiResponse {
-  candidates: Array<{
-    content: {
-      parts: Array<{
-        text: string;
-      }>;
-    };
-  }>;
+const CATEGORY_LIST = [
+  "Food", "Shopping", "Transport", "Bills", "Entertainment",
+  "Health", "Education", "Salary", "Transfer", "UPI", "Other",
+];
+const CATEGORIES = CATEGORY_LIST.join(", ");
+
+const TXN_RULES = `Extract every transaction from this bank statement section.
+
+Output plain text, one transaction per line, pipe separated, NOTHING else:
+TYPE|DATE|AMOUNT|BALANCE|DESCRIPTION|CATEGORY
+
+TYPE: C for credit/deposit, D for debit/withdrawal
+DATE: the transaction date, DD/MM/YYYY
+AMOUNT: the transaction amount, digits only, no commas or currency symbols
+BALANCE: the running closing balance shown after this transaction, digits only,
+         keep a leading minus if negative, no commas. Use 0 if not shown.
+DESCRIPTION: the narration text from the statement, max 60 characters
+CATEGORY: exactly one of ${CATEGORIES}
+
+Rules:
+- A transaction begins on a line that starts with a date. Its narration may wrap
+  across the following lines, and the amount and running balance usually appear
+  together at the end of the row (for example "5.00-387,508.63" means an amount
+  of 5.00 leaving a balance of -387,508.63). Emit ONE line per transaction.
+- Extract ONLY transactions visible in the text. Never invent or assume data.
+- No markdown, no code fences, no JSON, no commentary, no header row.
+- If no transactions are present, output nothing.`;
+
+// Folded into the first chunk's request rather than sent as its own call, to
+// spend one fewer request out of the daily quota.
+const HEADER_RULES = `Additionally, before the transaction lines, output exactly one account-details line:
+HEADER|accountHolder|accountNumber|accountType|bankName|startDate|endDate|closingBalance
+
+Dates are DD/MM/YYYY. closingBalance is digits only (may be negative), no commas.
+Use the text UNKNOWN for any account field that is not present.`;
+
+/**
+ * Single Gemini call. The proxy route targets gemini-flash-lite-latest, which has
+ * no "thinking" mode to disable in the first place, and retries the transient
+ * 429/503 responses the API returns under load.
+ */
+async function callGemini(prompt: string, maxOutputTokens: number): Promise<string> {
+  const body = JSON.stringify({
+    prompt,
+    config: {
+      temperature: 0, // deterministic: same statement must give the same result
+      maxOutputTokens,
+    },
+  });
+
+  // Running chunks in parallel raises the request rate, so 429s are expected on
+  // smaller quotas. Back off and retry rather than dropping to the local parsers,
+  // which produce far worse data than simply waiting a moment.
+  const backoffMs = [700, 1800, 4000];
+
+  for (let attempt = 0; attempt <= backoffMs.length; attempt++) {
+    const response = await fetch(GEMINI_PROXY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      return result?.response ?? "";
+    }
+
+    const retryable = response.status === 429 || response.status >= 500;
+    if (!retryable || attempt === backoffMs.length) {
+      throw new Error(`Gemini API error: ${response.status}`);
+    }
+    await new Promise((r) => setTimeout(r, backoffMs[attempt]));
+  }
+
+  return "";
 }
 
-export async function analyzeStatementWithGemini(textContent: string, file?: File): Promise<BankStatementData | null> {
+/** True when a line looks like it starts a transaction row. */
+function isTxnLine(line: string): boolean {
+  // Anchored at the line start on purpose: a wrapped narration line often carries
+  // the *value* date mid-line, and treating those as row starts would cut
+  // transactions in half at chunk boundaries.
+  return /^\s*\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/.test(line);
+}
+
+/**
+ * Split the statement on transaction boundaries so no row is ever cut in half,
+ * capping the number of parallel requests.
+ */
+function chunkStatement(text: string): string[] {
+  const lines = text.split("\n");
+  const starts = lines.map((l, i) => (isTxnLine(l) ? i : -1)).filter((i) => i >= 0);
+
+  if (starts.length <= MIN_TXN_LINES_PER_CHUNK) return [text];
+
+  const perChunk = Math.max(
+    MIN_TXN_LINES_PER_CHUNK,
+    Math.ceil(starts.length / MAX_PARALLEL_CHUNKS)
+  );
+
+  const chunks: string[] = [];
+  for (let i = 0; i < starts.length; i += perChunk) {
+    // The first chunk keeps the preamble above the rows, because that is where
+    // the account holder, account number, bank name and period are printed.
+    const from = i === 0 ? 0 : starts[i];
+    const next = starts[i + perChunk];
+    const to = next === undefined ? lines.length : next;
+    const chunk = lines.slice(from, to).join("\n").trim();
+    if (chunk) chunks.push(chunk);
+  }
+  return chunks.length ? chunks : [text];
+}
+
+/** Pull the merchant name and UPI id out of a narration locally, instead of paying
+ *  the model to echo them back for every single row. */
+function deriveMerchant(description: string): { merchant: string; upiId?: string } {
+  // The hyphen is the field separator in these narrations, so it must not be part
+  // of the VPA or the match runs backwards into the previous field.
+  const upiId = description.match(/[A-Za-z0-9._]+@[A-Za-z]{2,}/)?.[0];
+
+  let merchant = "";
+  const upiParts = description.split("-");
+  if (/^UPI/i.test(description) && upiParts.length > 1) {
+    merchant = upiParts[1].trim();
+  } else {
+    merchant = description.split(/[-/|]/)[0].trim();
+  }
+
+  return { merchant: merchant.slice(0, 40), upiId };
+}
+
+const DATE_FIELD_RE = /^\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}$/;
+
+/**
+ * Turn the compact pipe rows back into Transaction objects.
+ *
+ * Reading by fixed field position (type|date|amount|balance|desc|category) is
+ * the common case, but occasionally the model inserts a stray extra field - seen
+ * in practice as "D|C|20/06/2025|...", one field too many. A position-based read
+ * would land on "C" where a date is expected, fail to parse it, and silently
+ * drop the whole transaction. Locating the date by its actual shape rather than
+ * its position recovers these rows instead of losing real transactions.
+ */
+function parseTxnRows(raw: string, startIndex: number): Transaction[] {
+  const out: Transaction[] = [];
+
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!/^[CD]\s*\|/i.test(trimmed)) continue;
+
+    const fields = trimmed.split("|").map((f) => f.trim());
+
+    // The date is expected at index 1; search a little further in case of one
+    // stray extra field ahead of it.
+    let dateIdx = fields.findIndex((f, i) => i >= 1 && i <= 3 && DATE_FIELD_RE.test(f));
+    if (dateIdx === -1) continue; // nothing recognisable as a date at all
+
+    const date = normalizeTransactionDate(fields[dateIdx]);
+    if (!date) continue;
+
+    // Type is whichever of the fields before the date is a bare C or D; default
+    // to the very first field, which is correct in the overwhelming majority of
+    // rows and in the observed malformed case alike.
+    const typeField = fields.slice(0, dateIdx).find((f) => /^[CD]$/i.test(f)) ?? fields[0];
+
+    const amount = Number((fields[dateIdx + 1] || "").replace(/[^\d.\-]/g, ""));
+    if (!Number.isFinite(amount) || amount === 0) continue;
+
+    const balance = Number((fields[dateIdx + 2] || "").replace(/[^\d.\-]/g, ""));
+
+    // Whatever remains is [...description pieces, category]. The category is
+    // only trusted as the last field when it matches the known list - otherwise
+    // treat everything remaining as description and fall back to "Other".
+    const rest = fields.slice(dateIdx + 3);
+    const lastField = rest[rest.length - 1] || "";
+    const hasKnownCategory = CATEGORY_LIST.some((c) => c.toLowerCase() === lastField.toLowerCase());
+    const category = hasKnownCategory ? lastField : "Other";
+    const descParts = hasKnownCategory ? rest.slice(0, -1) : rest;
+    const description = descParts.join(" ").trim() || "Unknown Transaction";
+
+    const { merchant, upiId } = deriveMerchant(description);
+
+    out.push({
+      id: `trans-${startIndex + out.length + 1}`,
+      balanceAfter: Number.isFinite(balance) ? balance : undefined,
+      date,
+      description,
+      amount: Math.abs(amount),
+      type: typeField.toUpperCase() === "C" ? "credit" : "debit",
+      category,
+      merchant,
+      upiId,
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Decide credit vs debit from the running balance instead of trusting the model.
+ *
+ * PDF text extraction concatenates the statement's columns, so "5.00-387,508.63"
+ * carries no clue about whether 5.00 sat in the withdrawal or the deposit column
+ * and the model has to guess. The balance column is unambiguous: if the balance
+ * rose by exactly the transaction amount, money came in.
+ *
+ * The model's own answer is only overridden when the arithmetic matches to the
+ * paisa, so a misread balance leaves the original classification alone.
+ */
+function correctTypesFromBalances(transactions: Transaction[]): number {
+  let corrected = 0;
+
+  for (let i = 1; i < transactions.length; i++) {
+    const prev = transactions[i - 1].balanceAfter;
+    const curr = transactions[i].balanceAfter;
+    if (prev === undefined || curr === undefined || prev === 0 || curr === 0) continue;
+
+    const delta = curr - prev;
+    const amount = transactions[i].amount;
+    if (Math.abs(Math.abs(delta) - amount) > 0.011) continue; // evidence not clean
+
+    const implied = delta > 0 ? "credit" : "debit";
+    if (transactions[i].type !== implied) {
+      transactions[i].type = implied;
+      corrected++;
+    }
+  }
+
+  return corrected;
+}
+
+/** Parse the single account-details line. */
+function parseHeaderRow(raw: string): {
+  accountDetails?: BankStatementData["accountDetails"];
+  statementPeriod?: BankStatementData["statementPeriod"];
+  closingBalance: number;
+} {
+  // Must be the HEADER row specifically: the same response also carries the
+  // transaction rows, which are pipe separated too.
+  const line = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => /^HEADER\s*\|/i.test(l));
+
+  if (!line) return { closingBalance: 0 };
+
+  const clean = (v?: string) => {
+    const t = (v || "").trim();
+    return !t || t.toUpperCase() === "UNKNOWN" ? "" : t;
+  };
+
+  const p = line.replace(/^HEADER\s*\|/i, "").split("|");
+  const closing = Number(String(p[6] || "").replace(/[^\d.\-]/g, ""));
+
+  return {
+    accountDetails: {
+      accountHolder: clean(p[0]),
+      accountNumber: clean(p[1]),
+      accountType: clean(p[2]),
+      bankName: clean(p[3]),
+    },
+    statementPeriod: {
+      startDate: normalizeTransactionDate(clean(p[4])) || clean(p[4]),
+      endDate: normalizeTransactionDate(clean(p[5])) || clean(p[5]),
+    },
+    closingBalance: Number.isFinite(closing) ? closing : 0,
+  };
+}
+
+/** Last-resort local parsers. They are low quality, but better than no result. */
+function runFallbackParsers(textContent: string): BankStatementData | null {
   try {
-    // Check if Gemini API key is available
-    if (!GEMINI_API_KEY) {
-      console.warn("Gemini API key not found, using fallback parsers");
-      if (textContent) {
-        console.log("Trying Universal parser first...");
-        const universalResult = UniversalBankStatementParser.parseStatement(textContent);
-        if (universalResult) {
-          console.log("Successfully parsed using Universal parser");
-          return universalResult;
-        }
+    return (
+      UniversalBankStatementParser.parseStatement(textContent) ||
+      IndianBankStatementParser.parseStatement(textContent) ||
+      parseIndianBankStatement(textContent)
+    );
+  } catch (error) {
+    console.error("All fallback parsers failed:", error);
+    return null;
+  }
+}
 
-        console.log("Universal parser failed, trying advanced parser...");
-        const advancedResult = IndianBankStatementParser.parseStatement(textContent);
-        if (advancedResult) {
-          console.log("Successfully parsed using advanced parser");
-          return advancedResult;
-        }
+export async function analyzeStatementWithGemini(
+  textContent: string,
+  file?: File
+): Promise<BankStatementData | null> {
+  void file;
 
-        // Try simple fallback parser if both fail
-        console.log("Advanced parser failed, trying simple parser...");
-        const fallbackResult = parseIndianBankStatement(textContent);
-        if (fallbackResult) {
-          console.log("Successfully parsed using simple fallback parser");
-          return fallbackResult;
-        }
-      }
-      throw new Error("No API key available and all parsers failed");
+  try {
+    if (!textContent) throw new Error("No extracted text provided");
+
+    // No key check here: the key lives on the server, so this code cannot see it.
+    // A missing or rejected key surfaces as a failed proxy call and is handled by
+    // the catch below, which falls back to the local parsers.
+
+    // Guard against raw PDF bytes reaching the model.
+    const binaryMarkers = ["%PDF", "/Type", "endobj", "stream", "/Filter"];
+    if (binaryMarkers.some((m) => textContent.includes(m))) {
+      throw new Error("Binary PDF data detected - text extraction failed.");
     }
 
-    console.log("🔄 Starting fresh Gemini analysis (caching disabled)");
+    const chunks = chunkStatement(textContent);
+    const started = Date.now();
+    console.log(`Gemini analysis: ${textContent.length} chars in ${chunks.length} request(s)`);
 
-    // Use the provided extracted text (already extracted in bankStatementService)
-    if (!textContent) {
-      throw new Error("No extracted text provided");
+    // All chunks go out together, so wall time is the slowest single request
+    // rather than the sum. The first one also returns the account header.
+    const txnRaws = await Promise.all(
+      chunks.map((c, i) =>
+        callGemini(
+          i === 0
+            ? `${TXN_RULES}\n\n${HEADER_RULES}\n\nSTATEMENT SECTION:\n${c}`
+            : `${TXN_RULES}\n\nSTATEMENT SECTION:\n${c}`,
+          8192
+        )
+      )
+    );
+
+    const transactions: Transaction[] = [];
+    for (const raw of txnRaws) {
+      transactions.push(...parseTxnRows(raw, transactions.length));
+    }
+    const headerRaw = txnRaws[0];
+
+    console.log(
+      `Gemini analysis complete in ${((Date.now() - started) / 1000).toFixed(1)}s - ${transactions.length} transactions`
+    );
+
+    if (transactions.length === 0) {
+      throw new Error("Gemini could not extract meaningful data from the PDF text.");
     }
 
-    // Validate that the text is not binary data
-    console.log("🔍 Validating extracted text is not binary data...");
-    const binaryMarkers = ['%PDF', '/Type', '/Info', 'endobj', 'stream', '/Length', '/Filter', '<<', '>>', 'obj'];
-    const hasBinaryMarkers = binaryMarkers.some(marker => textContent.includes(marker));
-
-    if (hasBinaryMarkers) {
-      console.error("🚨 CRITICAL: Binary PDF data detected in extracted text!");
-      console.log("Text preview:", textContent.substring(0, 200));
-      throw new Error("Binary PDF data detected - text extraction failed. Will use fallback parsers.");
+    const corrected = correctTypesFromBalances(transactions);
+    if (corrected > 0) {
+      console.log(`Corrected ${corrected} credit/debit classification(s) from the balance column`);
     }
 
-    // Additional validation for readable text
-    const readableCharRegex = /[a-zA-Z0-9\s.,₹$]/;
-    const readableChars = textContent.match(readableCharRegex);
-    const readabilityRatio = readableChars ? readableChars.length / textContent.length : 0;
+    const { accountDetails, statementPeriod, closingBalance } = parseHeaderRow(headerRaw);
 
-    if (readabilityRatio < 0.3) {
-      console.warn("⚠️ Text appears to be corrupted or low quality (readability: " + Math.round(readabilityRatio * 100) + "%)");
-      console.log("Will attempt processing but may fall back to parsers...");
-    }
+    // Totals and chart data are computed locally from the extracted rows: the
+    // model is never asked to do arithmetic it would only be billed to echo back.
+    const recalc = recalculateSummaryFromTransactions(transactions);
+    const { daily } = buildBudgetDataFromTransactions(transactions);
 
-    console.log("=== EXTRACTED PDF TEXT ===");
-    console.log("Length:", textContent.length, "characters");
-    console.log("Readability:", Math.round(readabilityRatio * 100) + "%");
-    console.log("Preview:", textContent.substring(0, 1000) + "...");
-    console.log("=== END PDF TEXT ===");
-
-    // Add a timestamp to ensure fresh analysis each time
-    const timestamp = Date.now();
-
-    // Prepare the prompt for Gemini - enhanced for COMPREHENSIVE real bank statement analysis
-    const prompt = `
-      COMPREHENSIVE BANK STATEMENT ANALYSIS - EXTRACT ALL REAL DATA
-      
-      TEXT SIZE: ${textContent.length} characters
-      PROCESSING MODE: COMPLETE EXTRACTION (No limits, extract everything found)
-      
-      CRITICAL VALIDATION: First check if the provided text is readable bank statement data.
-      
-      PRELIMINARY CHECK:
-      - If the text contains PDF binary markers (%PDF, /Type, /Info, endobj, etc.), respond with empty results
-      - If the text is corrupted, garbled, or not human-readable, respond with empty results  
-      - If no meaningful transaction data can be found, respond with empty results
-      - ONLY proceed if you can clearly identify bank statement content
-      
-      COMPREHENSIVE EXTRACTION REQUIREMENTS:
-      
-      🔍 EXTRACT EVERY SINGLE TRANSACTION (No limits - process all pages/content):
-      - Scan the ENTIRE text content from beginning to end
-      - Extract ALL transactions regardless of statement size
-      - Include ALL dates, amounts, descriptions, reference numbers
-      - Process EVERY page if multi-page statement
-      - Handle statements with 100+ transactions
-      - Take time needed for complete analysis
-      
-      🏦 EXTRACT ALL ACCOUNT INFORMATION:
-      - Account holder name(s) - all names mentioned
-      - Complete account number (masked or full)
-      - Bank name and branch details
-      - IFSC code, branch address
-      - Account type (Savings/Current/Salary)
-      - Customer ID, CIF number
-      - Contact details (phone, email if mentioned)
-      
-      📅 EXTRACT ALL DATE INFORMATION:
-      - Statement period (start date, end date)
-      - Statement generation date
-      - Each transaction date and value date
-      - Last transaction date
-      - Account opening date (if mentioned)
-      
-      💰 EXTRACT ALL FINANCIAL DATA:
-      - Opening balance for the period
-      - Closing balance for the period
-      - Running balance after each transaction
-      - Minimum balance during period
-      - Maximum balance during period
-      - Total credits/debits for period
-      - Interest earned (if any)
-      - Charges deducted (if any)
-      
-      📊 EXTRACT ALL TRANSACTION DETAILS:
-      - Transaction date and time
-      - Transaction description/narration
-      - Transaction amount (exact value)
-      - Transaction type (credit/debit)
-      - Reference/transaction number
-      - Cheque number (if applicable)
-      - Channel (ATM/Online/Branch/Mobile)
-      - Location/branch of transaction
-      - Merchant name (extract from description)
-      - UPI ID (if UPI transaction)
-      - Card last 4 digits (if card transaction)
-      
-      🏷️ CATEGORIZE ALL TRANSACTIONS:
-      - "Salary/Income": Salary, wages, interest, deposits, refunds
-      - "Food & Dining": Restaurants, food delivery, groceries, cafes
-      - "Transportation": Uber, Ola, taxi, fuel, public transport, flights
-      - "Shopping": Amazon, Flipkart, retail, online purchases, shopping
-      - "Bills & Utilities": Electricity, water, gas, phone, internet, rent
-      - "Healthcare": Hospitals, doctors, medical, pharmacy, insurance
-      - "Entertainment": Movies, subscriptions, games, recreation
-      - "Education": Fees, courses, books, training
-      - "Investment": Mutual funds, stocks, SIP, insurance
-      - "UPI": All UPI transactions (also assign secondary category)
-      - "Transfer": Bank transfers, NEFT, IMPS, RTGS
-      - "ATM": ATM withdrawals and charges
-      - "Charges": Bank charges, fees, penalties
-      - "Other": Anything that doesn't fit above categories
-      
-      📈 CALCULATE ALL ANALYTICS:
-      - Total income vs expenses
-      - Category-wise spending breakdown
-      - Day-wise transaction distribution
-      - Average transaction amounts
-      - Largest credit and debit transactions
-      - Transaction frequency patterns
-      - Monthly spending trends (if multi-month)
-      
-      STRICT REAL DATA RULES:
-      1. ONLY extract data that is explicitly visible in the statement text
-      2. NEVER generate, assume, or create any transaction data
-      3. Use EXACT dates, amounts, and descriptions from the statement
-      4. If transaction details are incomplete, use what's available
-      5. If no transactions found, return empty array
-      6. Process the ENTIRE statement regardless of length
-      7. Take necessary time for complete extraction
-      8. Extract EVERY transaction without skipping any
-      
-      TRANSACTION CATEGORIZATION RULES:
-      - "Income": Salary, wages, deposits, transfers IN, interest credits
-      - "Food & Dining": Restaurants, food delivery, groceries, cafes
-      - "Transportation": Uber, Ola, taxi, fuel, public transport, flights
-      - "Shopping": Amazon, Flipkart, retail stores, online purchases
-      - "Bills & Utilities": Electricity, water, gas, phone, internet, rent
-      - "Healthcare": Hospitals, doctors, medical, pharmacy, insurance
-      - "UPI": All UPI transactions (also assign secondary category)
-      - "Transfer": Bank transfers, NEFT, IMPS, RTGS
-      - "Other": Anything that doesn't fit above categories
-      
-      EXTRACT THE FOLLOWING INFORMATION FROM THE ACTUAL STATEMENT:
-      
-      1. Account Details (from statement header):
-         - Account holder name
-         - Account number (last 4 digits if masked)
-         - Bank name
-         - Account type (Current/Savings)
-      
-      2. Statement Period (from statement dates):
-         - Start date
-         - End date
-      
-      3. Financial Summary (calculated from actual transactions):
-         - Total balance at statement end
-         - Total credits (income)
-         - Total debits (expenses)
-         - Number of credit transactions
-         - Number of debit transactions
-         - Comparison to previous period (if mentioned)
-      
-      4. All Real Transactions (from transaction list):
-         - Date (DD/MM/YYYY format)
-         - Description/Narration (exact text from statement)
-         - Amount (numeric value)
-         - Type (credit/debit based on statement)
-         - Category (from rules above)
-         - Reference number (extract if available, generate if not)
-         - Balance after transaction (if available)
-         - UPI ID (if UPI transaction)
-         - Merchant name (extract from description)
-      
-      5. Budget Data (from actual expense transactions):
-         - Daily expense amounts for chart visualization
-         - Format as array of {name: "DD/MM", amount: number}
-      
-      RESPONSE FORMAT - Return ONLY valid JSON:
-      {
-        "accountDetails": {
-          "accountHolder": "string",
-          "accountNumber": "string",
-          "accountType": "string",
-          "bankName": "string"
-        },
-        "statementPeriod": {
-          "startDate": "DD/MM/YYYY",
-          "endDate": "DD/MM/YYYY"
-        },
-        "totalBalance": number,
-        "income": number,
-        "expenses": number,
-        "incomeTransactions": number,
-        "expenseTransactions": number,
-        "comparedToLastMonth": number,
-        "budgetData": [
-          { "name": "DD/MM", "amount": number }
-        ],
-        "transactions": [
-          {
-            "id": "string",
-            "date": "DD/MM/YYYY",
-            "description": "string",
-            "amount": number,
-            "type": "credit" | "debit",
-            "category": "string",
-            "referenceNumber": "string",
-            "balanceAfter": number,
-            "merchant": "string",
-            "upiId": "string"
-          }
-        ]
-      }
-      
-      BANK STATEMENT TEXT TO ANALYZE:
-      ${textContent}
-      
-      CRITICAL REQUIREMENT: ONLY extract transactions that are CLEARLY VISIBLE in the above text.
-      
-      DO NOT GENERATE OR CREATE ANY FAKE/REALISTIC DATA.
-      DO NOT ASSUME OR INVENT TRANSACTIONS.
-      
-      If the text is garbled, corrupted, or unreadable, return EMPTY results:
-      {
-        "totalBalance": 0,
-        "income": 0,
-        "expenses": 0,
-        "incomeTransactions": 0,
-        "expenseTransactions": 0,
-        "comparedToLastMonth": 0,
-        "budgetData": [],
-        "transactions": [],
-        "accountDetails": null,
-        "statementPeriod": null
-      }
-      
-      ONLY proceed with extraction if you can clearly identify real transaction data in the text above.
-    `;
-
-    console.log("🚀 Sending comprehensive analysis request to Gemini API...");
-    console.log(`📊 Processing ${textContent.length} characters for complete extraction`);
-
-    // Call Gemini API with enhanced configuration for large statements
-    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: prompt,
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0,  // Set to 0 for deterministic results
-          topP: 0.95,
-          topK: 40,
-          maxOutputTokens: 32768,  // Increased for large statements
-          candidateCount: 1,
-        },
-        safetySettings: [
-          {
-            category: "HARM_CATEGORY_HARASSMENT",
-            threshold: "BLOCK_NONE"
-          },
-          {
-            category: "HARM_CATEGORY_HATE_SPEECH",
-            threshold: "BLOCK_NONE"
-          },
-          {
-            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            threshold: "BLOCK_NONE"
-          },
-          {
-            category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-            threshold: "BLOCK_NONE"
-          }
-        ]
-      }),
-    });
-
-    console.log(`⏱️ Gemini API response status: ${response.status}`);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("🚨 Gemini API Error:", errorText);
-      throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
-    }
-
-    const result: GeminiResponse = await response.json();
-    console.log("✅ Received response from Gemini API");
-    const jsonResponse = result.candidates[0].content.parts[0].text;
-
-    // Parse the JSON response from Gemini
-    let parsedData;
-    try {
-      console.log("=== RAW GEMINI RESPONSE ===");
-      console.log(jsonResponse);
-      console.log("=== END GEMINI RESPONSE ===");
-
-      // Clean up the response and extract JSON
-      const cleanedResponse = jsonResponse.replace(/^[^{]*?({[\s\S]*})[^}]*$/, '$1');
-
-      // Additional cleanup for any markdown or code block markers
-      const noMarkdown = cleanedResponse
-        .replace(/```(?:json)?\n?([\s\S]*?)\n?```/g, '$1')
-        .trim();
-
-      // Attempt to parse the cleaned JSON
-      try {
-        parsedData = JSON.parse(noMarkdown);
-      } catch (firstError) {
-        console.log("First parse attempt failed, trying to find valid JSON object");
-        // If direct parse fails, try to find a valid JSON object
-        const jsonMatch = noMarkdown.match(/{[\s\S]*}/);
-        if (!jsonMatch) {
-          throw new Error("No valid JSON object found in response");
-        }
-        parsedData = JSON.parse(jsonMatch[0]);
-      }
-
-      // Validate the parsed data has the required structure
-      if (!parsedData || typeof parsedData !== 'object') {
-        throw new Error("Invalid JSON structure");
-      }
-
-      // Ensure all required fields are present and have correct types
-      const requiredFields = [
-        'totalBalance',
-        'income',
-        'expenses',
-        'incomeTransactions',
-        'expenseTransactions',
-        'transactions'
-      ];
-
-      for (const field of requiredFields) {
-        if (!(field in parsedData)) {
-          console.warn(`Missing field: ${field}, using default value`);
-          // Set default values for missing fields
-          switch (field) {
-            case 'totalBalance':
-            case 'income':
-            case 'expenses':
-              parsedData[field] = 0;
-              break;
-            case 'incomeTransactions':
-            case 'expenseTransactions':
-              parsedData[field] = 0;
-              break;
-            case 'transactions':
-              parsedData[field] = [];
-              break;
-            case 'budgetData':
-              parsedData[field] = [];
-              break;
-          }
-        }
-      }
-
-      // Validate, fix, and normalize transaction data (real data only)
-      if (Array.isArray(parsedData.transactions)) {
-        parsedData.transactions = parsedData.transactions.map((transaction: any, index: number) => {
-          const rawDate = transaction.date || new Date().toLocaleDateString("en-GB");
-          const normalizedDate = normalizeTransactionDate(String(rawDate));
-          return {
-            id: transaction.id || `trans-${index + 1}`,
-            date: normalizedDate,
-            description: transaction.description || "Unknown Transaction",
-            amount: Number(transaction.amount) || 0,
-            type: transaction.type === "credit" ? "credit" : "debit",
-            category: (transaction.category || "Other").trim() || "Other",
-            referenceNumber: transaction.referenceNumber || `REF${Date.now()}${index}`,
-            balanceAfter: Number(transaction.balanceAfter) || 0,
-            merchant: transaction.merchant || "",
-            upiId: transaction.upiId || undefined,
-          };
-        }) as Transaction[];
-      }
-
-      // Recalculate totals from real transactions (single source of truth)
-      const tx = parsedData.transactions || [];
-      const recalc = recalculateSummaryFromTransactions(tx);
-      parsedData.income = recalc.income;
-      parsedData.expenses = recalc.expenses;
-      parsedData.incomeTransactions = recalc.incomeTransactions;
-      parsedData.expenseTransactions = recalc.expenseTransactions;
-
-      // Build budget data from real transactions (daily + category for charts)
-      const { daily } = buildBudgetDataFromTransactions(tx);
-      parsedData.budgetData = daily;
-
-      console.log("Successfully parsed and validated Gemini response (totals from real transactions)");
-
-    } catch (parseError) {
-      console.error("Error parsing Gemini response:", parseError);
-      console.log("Raw response:", jsonResponse);
-      throw new Error(`Failed to parse Gemini response: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
-    }
-
-    // Check if Gemini detected binary/corrupted data and returned empty results
-    if (parsedData.transactions && Array.isArray(parsedData.transactions) &&
-      parsedData.transactions.length === 0 &&
-      (parsedData.totalBalance === 0 || parsedData.totalBalance === "₹0" || !parsedData.totalBalance)) {
-
-      console.warn("⚠️ Gemini returned empty results - likely due to PDF binary data being sent instead of extracted text");
-      console.log("Checking if extracted text contained binary markers...");
-
-      // Check if the text contained PDF binary markers
-      const hasBinaryMarkers = textContent.includes('%PDF') ||
-        textContent.includes('/Type') ||
-        textContent.includes('endobj') ||
-        textContent.includes('stream');
-
-      if (hasBinaryMarkers) {
-        console.error("🚨 CRITICAL: PDF binary data was sent to Gemini instead of extracted text!");
-        console.log("Text preview:", textContent.substring(0, 200));
-        throw new Error("PDF text extraction failed - binary data detected. Will use emergency fallback.");
-      }
-
-      console.log("No binary markers found, but Gemini still returned empty results. Text may be corrupted or unreadable.");
-      throw new Error("Gemini could not extract meaningful data from the PDF text. Will use emergency fallback.");
-    }
-
-    // Format the data for our application with proper error handling
-    const formattedData: BankStatementData = {
-      totalBalance: `₹${(parsedData.totalBalance || 0).toLocaleString('en-IN')}`,
-      income: `₹${(parsedData.income || 0).toLocaleString('en-IN')}`,
-      expenses: `₹${(parsedData.expenses || 0).toLocaleString('en-IN')}`,
-      incomeTransactions: parsedData.incomeTransactions || 0,
-      expenseTransactions: parsedData.expenseTransactions || 0,
-      comparedToLastMonth: `₹${Math.abs(parsedData.comparedToLastMonth || 0).toLocaleString('en-IN')}${(parsedData.comparedToLastMonth || 0) >= 0 ? '+' : '-'}`,
-      budgetData: parsedData.budgetData || [],
-      transactions: parsedData.transactions || [],
-      accountDetails: parsedData.accountDetails,
-      statementPeriod: parsedData.statementPeriod
+    return {
+      totalBalance: `₹${closingBalance.toLocaleString("en-IN")}`,
+      income: `₹${recalc.income.toLocaleString("en-IN")}`,
+      expenses: `₹${recalc.expenses.toLocaleString("en-IN")}`,
+      incomeTransactions: recalc.incomeTransactions,
+      expenseTransactions: recalc.expenseTransactions,
+      comparedToLastMonth: "₹0",
+      budgetData: daily,
+      transactions,
+      accountDetails,
+      statementPeriod,
     };
-
-    console.log("Formatted data for application:", {
-      transactionCount: formattedData.transactions.length,
-      totalBalance: formattedData.totalBalance,
-      income: formattedData.income,
-      expenses: formattedData.expenses
-    });
-
-    // Return fresh results (no caching)
-    console.log("✅ Fresh Gemini analysis completed");
-
-    return formattedData;
   } catch (error) {
     console.error("Error analyzing statement with Gemini:", error);
-
-    // Try advanced fallback parser first
-    console.log("Attempting fallback parsing in order: Universal -> Advanced -> Simple...");
-    try {
-      if (textContent) {
-        console.log("Trying Universal parser first...");
-        const universalResult = UniversalBankStatementParser.parseStatement(textContent);
-        if (universalResult) {
-          console.log("Successfully parsed using Universal parser");
-          return universalResult;
-        }
-
-        console.log("Universal parser failed, trying advanced parser...");
-        const advancedResult = IndianBankStatementParser.parseStatement(textContent);
-        if (advancedResult) {
-          console.log("Successfully parsed using advanced parser");
-          return advancedResult;
-        }
-
-        // Try simple fallback parser if both fail
-        console.log("Advanced parser failed, trying simple parser...");
-        const fallbackResult = parseIndianBankStatement(textContent);
-        if (fallbackResult) {
-          console.log("Successfully parsed using simple fallback parser");
-          return fallbackResult;
-        }
-      }
-    } catch (fallbackError) {
-      console.error("All fallback parsers failed:", fallbackError);
-    }
-
-    return null;
+    console.log("Attempting fallback parsing: Universal -> Advanced -> Simple...");
+    return runFallbackParsers(textContent);
   }
 }

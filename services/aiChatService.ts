@@ -9,9 +9,15 @@ import { Transaction, BankStatementData } from './bankStatementService';
 import { FinancialAnalytics, MonthlySummary, DailySummary, CategoryInsight } from './financialAnalytics';
 import { DateQueryParser, DateRange } from '../utils/dateQueryParser';
 
-const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-// Use gemini-flash-latest (stable alias)
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
+// Chat requests go through this app's own server route, which holds the API key,
+// so no key is ever exposed to the browser.
+
+// How much of the prompt the raw transaction ledger may occupy. Gemini Flash has
+// a very large context window, and input tokens cost far less latency than output
+// tokens, so an ordinary statement is sent in full and nothing is hidden from the
+// assistant. Roughly 120k characters is about 30k tokens, which comfortably holds
+// a few thousand transactions.
+const LEDGER_CHAR_BUDGET = 120_000;
 
 export enum QueryType {
     MONTHLY_SUMMARY = "monthly_summary",
@@ -62,9 +68,16 @@ export class AIFinancialChatService {
             const queryType = await this.classifyQuery(userQuery);
             console.log(`[AI Chat] Query type: ${queryType}`);
 
-            // Step 2: Extract relevant data based on query type
-            const relevantData = await this.extractRelevantData(userQuery, queryType, context);
-            console.log(`[AI Chat] Extracted data for ${queryType}`);
+            // Step 2: Extract the extra analytics for this query type. These are a
+            // bonus on top of the full ledger, so a failure here must not sink the
+            // whole answer - the model can still work from the statement itself.
+            let relevantData: any = {};
+            try {
+                relevantData = await this.extractRelevantData(userQuery, queryType, context);
+                console.log(`[AI Chat] Extracted data for ${queryType}`);
+            } catch (dataError) {
+                console.warn(`[AI Chat] Targeted analytics failed for ${queryType}, continuing with full ledger:`, dataError);
+            }
 
             // Step 3: Generate personalized response
             const response = await this.generatePersonalizedResponse(
@@ -161,6 +174,29 @@ export class AIFinancialChatService {
     /**
      * Extract relevant data based on query type
      */
+    /**
+     * The month to fall back on when the question names no period.
+     *
+     * A statement is historical, so "this month" by the wall clock is usually
+     * outside the statement entirely and would feed the model an empty ₹0
+     * summary. The latest month actually present is what the user means.
+     */
+    private static latestMonthInStatement(transactions: Transaction[]): { month: number; year: number } {
+        let best = { month: 0, year: 0 };
+
+        for (const t of transactions) {
+            const [, m, y] = (t.date || "").split("/").map(Number);
+            if (!m || !y) continue;
+            if (y > best.year || (y === best.year && m > best.month)) best = { month: m, year: y };
+        }
+
+        if (!best.year) {
+            const now = new Date();
+            return { month: now.getMonth() + 1, year: now.getFullYear() };
+        }
+        return best;
+    }
+
     private static async extractRelevantData(
         query: string,
         queryType: QueryType,
@@ -175,9 +211,9 @@ export class AIFinancialChatService {
                     const [day, month, year] = dateRange.start.split('/').map(Number);
                     return FinancialAnalytics.getMonthlySpending(transactions, month, year);
                 }
-                // Default to current month
-                const now = new Date();
-                return FinancialAnalytics.getMonthlySpending(transactions, now.getMonth() + 1, now.getFullYear());
+                // Default to the newest month the statement actually covers.
+                const latest = this.latestMonthInStatement(transactions);
+                return FinancialAnalytics.getMonthlySpending(transactions, latest.month, latest.year);
             }
 
             case QueryType.DAILY_TRANSACTIONS: {
@@ -214,16 +250,17 @@ export class AIFinancialChatService {
             }
 
             case QueryType.COMPARISON: {
-                // Try to extract two time periods
-                const now = new Date();
-                const thisMonth = FinancialAnalytics.getMonthlySpending(transactions, now.getMonth() + 1, now.getFullYear());
-                const lastMonth = FinancialAnalytics.getMonthlySpending(transactions, now.getMonth(), now.getFullYear());
+                // Compare the last two months the statement covers, not the last
+                // two calendar months, which usually fall outside it.
+                const latest = this.latestMonthInStatement(transactions);
+                const prevMonth = latest.month === 1 ? 12 : latest.month - 1;
+                const prevYear = latest.month === 1 ? latest.year - 1 : latest.year;
                 return FinancialAnalytics.compareMonths(
                     transactions,
-                    now.getMonth() + 1,
-                    now.getFullYear(),
-                    now.getMonth(),
-                    now.getFullYear()
+                    latest.month,
+                    latest.year,
+                    prevMonth,
+                    prevYear
                 );
             }
 
@@ -266,10 +303,9 @@ export class AIFinancialChatService {
         context: ChatContext,
         conversationHistory: ChatMessage[]
     ): Promise<string> {
-        if (!GEMINI_API_KEY) {
-            console.warn('[AI Chat] No Gemini API key found, using fallback response');
-            return this.generateFallbackResponse(userQuery, queryType, relevantData, context);
-        }
+        // No key check here: the key lives on the server behind /api/gemini-chat,
+        // so this client code cannot see it. A missing key comes back as a failed
+        // request and is handled by the catch below.
 
         // Build context-rich prompt
         const prompt = this.buildAIPrompt(userQuery, queryType, relevantData, context, conversationHistory);
@@ -334,6 +370,139 @@ export class AIFinancialChatService {
     }
 
     /**
+     * Render every transaction as a compact row.
+     *
+     * The assistant is told it has the complete statement, so it must actually
+     * receive it: without the ledger it can only answer from a handful of
+     * pre-computed aggregates and has to guess at anything specific.
+     *
+     * Descriptions are shortened progressively if a very long statement would
+     * otherwise blow the budget, and only as a last resort are older rows left
+     * out - in which case the omission is stated in the prompt rather than
+     * silently hidden from the model.
+     */
+    private static buildLedger(transactions: Transaction[]): string {
+        if (!transactions.length) return "No transactions in this statement.";
+
+        const render = (descLen: number, rows: Transaction[]) =>
+            rows
+                .map((t, i) => {
+                    const dir = t.type === "credit" ? "CR" : "DR";
+                    const desc = (t.description || "").slice(0, descLen);
+                    const merchant = (t.merchant || "").slice(0, 24);
+                    return `${i + 1}|${t.date}|${dir}|${t.amount}|${t.category || "Other"}|${merchant}|${desc}`;
+                })
+                .join("\n");
+
+        const header =
+            "ALL TRANSACTIONS (index|date|CR=money in, DR=money out|amount in rupees|category|merchant|description):\n";
+
+        // Try progressively shorter descriptions before dropping any rows.
+        for (const descLen of [70, 45, 25]) {
+            const body = render(descLen, transactions);
+            if (header.length + body.length <= LEDGER_CHAR_BUDGET) return header + body;
+        }
+
+        // Extremely long statement: keep the most recent rows that fit and say so.
+        const kept: Transaction[] = [];
+        let used = header.length;
+        for (let i = transactions.length - 1; i >= 0; i--) {
+            const cost = 60 + Math.min((transactions[i].description || "").length, 25);
+            if (used + cost > LEDGER_CHAR_BUDGET) break;
+            used += cost;
+            kept.unshift(transactions[i]);
+        }
+        const omitted = transactions.length - kept.length;
+        return (
+            header +
+            render(25, kept) +
+            `\n\nNOTE: this statement has ${transactions.length} transactions and the ${omitted} oldest are not listed individually above. ` +
+            `Use the STATEMENT TOTALS section for any figure covering the whole period, and say so if the user asks about an omitted transaction.`
+        );
+    }
+
+    /**
+     * Pre-compute the totals the model would otherwise have to derive by adding up
+     * hundreds of rows by hand, which is exactly where language models slip.
+     */
+    private static buildStatementOverview(transactions: Transaction[]): string {
+        if (!transactions.length) return "";
+
+        const byCategory: Record<string, { total: number; count: number }> = {};
+        const byMonth: Record<string, { inFlow: number; outFlow: number; count: number }> = {};
+        const byMerchant: Record<string, { total: number; count: number }> = {};
+        let totalIn = 0;
+        let totalOut = 0;
+
+        for (const t of transactions) {
+            const amount = Number(t.amount) || 0;
+            const isDebit = t.type === "debit";
+
+            if (isDebit) totalOut += amount;
+            else totalIn += amount;
+
+            if (isDebit) {
+                const cat = t.category || "Other";
+                byCategory[cat] = byCategory[cat] || { total: 0, count: 0 };
+                byCategory[cat].total += amount;
+                byCategory[cat].count++;
+
+                const merchant = (t.merchant || t.description || "Unknown").slice(0, 28);
+                byMerchant[merchant] = byMerchant[merchant] || { total: 0, count: 0 };
+                byMerchant[merchant].total += amount;
+                byMerchant[merchant].count++;
+            }
+
+            const [, mm, yyyy] = (t.date || "").split("/");
+            if (mm && yyyy) {
+                const key = `${mm}/${yyyy}`;
+                byMonth[key] = byMonth[key] || { inFlow: 0, outFlow: 0, count: 0 };
+                byMonth[key].count++;
+                if (isDebit) byMonth[key].outFlow += amount;
+                else byMonth[key].inFlow += amount;
+            }
+        }
+
+        const rupees = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
+        const sortDesc = <T extends { total: number }>(o: Record<string, T>) =>
+            Object.entries(o).sort((a, b) => b[1].total - a[1].total);
+
+        const largest = [...transactions]
+            .sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0))
+            .slice(0, 10);
+
+        return `STATEMENT TOTALS (already calculated - trust these over your own arithmetic):
+- Money in: ${rupees(totalIn)} | Money out: ${rupees(totalOut)} | Net: ${rupees(totalIn - totalOut)}
+- Transactions: ${transactions.length}
+
+SPENDING BY CATEGORY:
+${sortDesc(byCategory)
+    .map(([cat, v]) => `- ${cat}: ${rupees(v.total)} across ${v.count} transaction(s)`)
+    .join("\n")}
+
+BY MONTH (MM/YYYY):
+${Object.entries(byMonth)
+    .sort(([a], [b]) => {
+        const [ma, ya] = a.split("/");
+        const [mb, yb] = b.split("/");
+        return ya === yb ? Number(ma) - Number(mb) : Number(ya) - Number(yb);
+    })
+    .map(([m, v]) => `- ${m}: in ${rupees(v.inFlow)}, out ${rupees(v.outFlow)}, ${v.count} transaction(s)`)
+    .join("\n")}
+
+TOP PAYEES BY SPEND:
+${sortDesc(byMerchant)
+    .slice(0, 15)
+    .map(([m, v]) => `- ${m}: ${rupees(v.total)} across ${v.count} transaction(s)`)
+    .join("\n")}
+
+LARGEST TRANSACTIONS:
+${largest
+    .map((t) => `- ${t.date} ${t.type === "credit" ? "CR" : "DR"} ${rupees(Number(t.amount) || 0)} - ${(t.description || "").slice(0, 50)}`)
+    .join("\n")}`;
+    }
+
+    /**
      * Build context-rich prompt for Gemini AI
      */
     private static buildAIPrompt(
@@ -347,7 +516,10 @@ export class AIFinancialChatService {
 
         let dataContext = '';
 
-        // Add query-specific data
+        // Add query-specific data. This is supplementary detail layered on top of
+        // the full ledger below, so if the shape is not what this branch expects
+        // it is dropped rather than allowed to break the whole prompt.
+        try {
         switch (queryType) {
             case QueryType.MONTHLY_SUMMARY:
                 const monthly = relevantData as MonthlySummary;
@@ -420,14 +592,23 @@ ${relevantData.suggestions.map((s: string, i: number) => `${i + 1}. ${s}`).join(
                 break;
 
             default:
-                dataContext = `
-TRANSACTION DATA:
-- Total transactions: ${transactions.length}
-- Total balance: ${totalBalance}
-- Total income: ${income}
-- Total expenses: ${expenses}
-`;
+                // The ledger and totals below already cover the general case.
+                dataContext = '';
         }
+        } catch (contextError) {
+            console.warn('[AI Chat] Skipping query-specific context block:', contextError);
+            dataContext = '';
+        }
+
+        // Every query gets the complete statement, not just the slice the
+        // classifier guessed at, so follow-up and open-ended questions work too.
+        const overview = this.buildStatementOverview(transactions);
+        const ledger = this.buildLedger(transactions);
+
+        const history = conversationHistory
+            .slice(-6)
+            .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 400)}`)
+            .join('\n');
 
         return `You are a personal financial assistant with complete access to the user's bank statement data.
 
@@ -441,8 +622,11 @@ FINANCIAL OVERVIEW:
 - Statement Period: ${statementPeriod?.startDate || 'N/A'} to ${statementPeriod?.endDate || 'N/A'}
 - Total Transactions: ${transactions.length}
 
-${dataContext}
+${overview}
 
+${ledger}
+${dataContext}
+${history ? `\nRECENT CONVERSATION:\n${history}\n` : ''}
 INSTRUCTIONS:
 1. **Structure & Formatting**:
    - Use clear MAIN HEADINGS (like ## Analysis, ## Insights)
@@ -454,6 +638,15 @@ INSTRUCTIONS:
    - Start with a direct answer to the user's question
    - Use specific transaction details to prove you know the data
    - Be friendly but professional (Financial Advisor persona)
+
+2b. **Using the statement**:
+   - The ALL TRANSACTIONS ledger above is the user's complete statement. Quote
+     real dates, amounts, payees and descriptions from it when answering.
+   - For any total, use the pre-calculated STATEMENT TOTALS rather than adding up
+     the ledger yourself.
+   - CR means money coming in, DR means money going out. Never mix these up.
+   - If the answer genuinely is not in the statement, say so plainly instead of
+     estimating. Never invent a transaction, amount or date.
 
 3. **Required Sections** (adapt based on query):
    - **Direct Answer**: The numbers/facts requested

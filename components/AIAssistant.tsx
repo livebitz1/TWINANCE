@@ -99,7 +99,12 @@ export default function AIAssistant({ isBlurred = false }: AIAssistantProps) {
 
   return (
     <Card className={cn(
-      "bg-background/10 backdrop-blur-sm border-border/30 h-full transition-all shadow-md hover:shadow-lg flex flex-col",
+      // overflow-hidden is the hard backstop: the inner flex-1/min-h-0/overflow-y-auto
+      // chain below should already keep the message list inside the card, but
+      // without this, anything that chain doesn't catch renders straight past the
+      // card's border into whatever comes next in the page instead of being
+      // clipped or scrolled.
+      "bg-background/10 backdrop-blur-sm border-border/30 h-full overflow-hidden transition-all shadow-md hover:shadow-lg flex flex-col",
       isBlurred && "hover:opacity-60"
     )}>
       <CardHeader className="pb-2 border-b border-border/20 flex-shrink-0">
@@ -120,10 +125,13 @@ export default function AIAssistant({ isBlurred = false }: AIAssistantProps) {
         )}
       </CardHeader>
 
-      <CardContent className="p-4 flex-1 flex flex-col overflow-hidden">
+      <CardContent className="p-4 flex-1 flex flex-col overflow-hidden min-h-0">
         {/* Messages */}
+        {/* min-h-0 overrides the flex default of min-height:auto, which sizes a
+            flex child to its content and silently defeats overflow-y-auto - the
+            box would keep growing with every reply instead of scrolling. */}
         <div className={cn(
-          "flex-1 space-y-3 overflow-y-auto mb-4 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-transparent",
+          "flex-1 min-h-0 space-y-3 overflow-y-auto mb-4 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-transparent",
           isBlurred && "blur-sm select-none"
         )}>
           {messages.map((msg, index) => (
