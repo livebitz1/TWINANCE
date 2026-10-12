@@ -2,19 +2,11 @@
 
 import { Transaction } from "./bankStatementService";
 
-// Gemini API configuration
-const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
-
-interface GeminiResponse {
-  candidates: Array<{
-    content: {
-      parts: Array<{
-        text: string;
-      }>;
-    };
-  }>;
-}
+// Goes through this app's own server route, which holds the API key and targets a
+// current model. This previously called "gemini-pro" directly using a browser
+// visible key; that model has since been retired, so the call always failed and
+// every explanation silently came from the local fallback below.
+const GEMINI_PROXY_URL = "/api/gemini-chat";
 
 export async function explainTransaction(transaction: Transaction): Promise<string> {
   try {
@@ -40,27 +32,19 @@ export async function explainTransaction(transaction: Transaction): Promise<stri
       Keep the response concise (2-3 sentences) and helpful for personal finance management.
     `;
 
-    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+    const response = await fetch(GEMINI_PROXY_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: prompt,
-              },
-            ],
-          },
-        ],
-        generationConfig: {
+        prompt,
+        config: {
           temperature: 0.7,
           topP: 0.8,
           topK: 40,
           maxOutputTokens: 256,
-        }
+        },
       }),
     });
 
@@ -68,8 +52,9 @@ export async function explainTransaction(transaction: Transaction): Promise<stri
       throw new Error(`Gemini API error: ${response.status}`);
     }
 
-    const result: GeminiResponse = await response.json();
-    return result.candidates[0].content.parts[0].text;
+    const result = await response.json();
+    if (!result?.response) throw new Error("Empty explanation from API");
+    return result.response;
   } catch (error) {
     console.error("Error explaining transaction:", error);
     

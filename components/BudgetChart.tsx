@@ -294,7 +294,11 @@ export default function BudgetChart({ isBlurred = false }: BudgetChartProps) {
   // Render content
   return (
     <Card className={cn(
-      "bg-background/10 backdrop-blur-sm border-border/30 w-full transition-all shadow-md hover:shadow-lg h-full flex flex-col",
+      // overflow-hidden is the hard backstop: if the header's controls and
+      // insight tiles ever need more room than the card's bounded height
+      // leaves, this clips the excess instead of letting it render past the
+      // card's border into whatever section comes next on the page.
+      "bg-background/10 backdrop-blur-sm border-border/30 w-full overflow-hidden transition-all shadow-md hover:shadow-lg h-full flex flex-col",
       isBlurred && "hover:opacity-60"
     )}>
       <CardHeader className="pb-2">

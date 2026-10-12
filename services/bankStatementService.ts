@@ -3,7 +3,7 @@
 import { analyzeStatementWithGemini } from "./geminiService";
 import { extractTextFromPDF } from "@/utils/pdfUtils";
 import { ParsingDebugger } from "./parsingDebugger";
-import { CacheCleaner } from "@/utils/cacheCleaner";
+import { generateFileHash, getCachedAnalysis, cacheAnalysisResult } from "./cacheService";
 
 export interface Transaction {
   id: string;
@@ -130,46 +130,28 @@ export function buildBudgetDataFromTransactions(transactions: Transaction[]): {
 
 export async function processBankStatement(file: File): Promise<BankStatementData | null> {
   try {
-    console.log(`🚀 Starting COMPREHENSIVE processing: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
-    console.log("⏱️ Processing mode: COMPLETE EXTRACTION (may take time for large files)");
-    console.log("🔄 Processing fresh analysis (caching disabled for accuracy)");
-    
-    // Ensure no cached data interferes with fresh processing
-    CacheCleaner.clearAllCache();
-    
-    // Show extended loading for comprehensive processing
-    console.log("⏳ Initializing comprehensive extraction pipeline...");
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // Extract text from PDF first with comprehensive methods
-    console.log("📄 Phase 1: COMPREHENSIVE PDF text extraction...");
-    console.log("   🔍 Using all available extraction methods");
-    console.log("   ⏱️ This may take time for large files - please wait");
-    
+    const startedAt = Date.now();
+    console.log(`🚀 Processing ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+
+    // An identical file returns the stored analysis instantly. Analysis runs at
+    // temperature 0, so a repeat upload would produce the same result anyway.
+    const fileHash = await generateFileHash(file);
+    const cached = getCachedAnalysis(fileHash);
+    if (cached) {
+      console.log(`⚡ Served from cache in ${Date.now() - startedAt}ms`);
+      return cached;
+    }
+
+    console.log("📄 Phase 1: PDF text extraction...");
     const extractedText = await extractTextFromPDF(file);
     
     if (!extractedText || extractedText.trim().length === 0) {
       throw new Error("CRITICAL: No text could be extracted from the PDF file using any method");
     }
     
-    console.log(`✅ Phase 1 Complete: Extracted ${extractedText.length} characters from PDF`);
-    console.log(`📊 Text quality: ${Math.round((extractedText.match(/[a-zA-Z0-9]/g)?.length || 0) / extractedText.length * 100)}% readable`);
-    
-    // Enhanced debugging for large files
-    if (process.env.NODE_ENV === 'development') {
-      console.log("=== DEBUGGING COMPREHENSIVE EXTRACTION ===");
-      console.log(`File size: ${(file.size / 1024).toFixed(2)} KB`);
-      console.log(`Extracted text length: ${extractedText.length} characters`);
-      console.log(`Text preview (first 500 chars): ${extractedText.substring(0, 500)}`);
-      ParsingDebugger.debugParsing(extractedText);
-    }
-    
-    // Phase 2: Comprehensive AI Analysis
-    console.log("🤖 Phase 2: COMPREHENSIVE AI analysis...");
-    console.log("   🧠 Using advanced Gemini AI for complete data extraction");
-    console.log("   📊 Analyzing ALL transactions and account details");
-    console.log("   ⏱️ Large statements may require extended processing time");
-    
+    console.log(`✅ Phase 1 complete in ${Date.now() - startedAt}ms: ${extractedText.length} characters`);
+
+    console.log("🤖 Phase 2: AI analysis...");
     let result = await analyzeStatementWithGemini(extractedText, file);
     if (result) {
       // Normalize all transaction dates and ensure totals/budgetData are from real transactions
@@ -219,24 +201,11 @@ export async function processBankStatement(file: File): Promise<BankStatementDat
         expenseTransactions: recalc.expenseTransactions,
         budgetData: daily,
       };
-      console.log("✅ Phase 2 Complete: Successfully analyzed statement");
-      console.log(`📈 EXTRACTION RESULTS:`);
-      console.log(`   💳 Account: ${result.accountDetails?.accountHolder || 'Extracted'}`);
-      console.log(`   🏦 Bank: ${result.accountDetails?.bankName || 'Identified'}`);
-      console.log(`   📅 Period: ${result.statementPeriod?.startDate} to ${result.statementPeriod?.endDate}`);
-      console.log(`   💰 Transactions: ${result.transactions.length} found`);
-      console.log(`   📊 Total Income: ₹${result.income}`);
-      console.log(`   📉 Total Expenses: ₹${result.expenses}`);
-      console.log(`   💼 Balance: ₹${result.totalBalance}`);
-      
+      console.log(`✅ Phase 2 complete: ${result.transactions.length} transactions`);
+
       // Comprehensive validation for real data
       if (result.transactions.length === 0) {
         console.warn("⚠️ ANALYSIS WARNING: 0 transactions extracted");
-        console.warn("   This could mean:");
-        console.warn("   - PDF is image-based (scanned without text)");
-        console.warn("   - PDF is password-protected or corrupted");
-        console.warn("   - Text extraction failed to capture transaction data");
-        console.warn("   - Statement format is not recognized");
         throw new Error("No transactions could be extracted from the PDF. The PDF may be image-based, password-protected, corrupted, or contain unreadable bank statement data.");
       }
       
@@ -252,12 +221,11 @@ export async function processBankStatement(file: File): Promise<BankStatementDat
       
       // Validate extracted transactions in development
       if (process.env.NODE_ENV === 'development') {
-        console.log("=== VALIDATING EXTRACTED REAL DATA ===");
         ParsingDebugger.validateTransactions(result.transactions);
-        console.log("=== VALIDATION COMPLETE ===");
       }
-      
-      console.log("🎉 SUCCESS: Comprehensive extraction completed with real data only");
+
+      cacheAnalysisResult(fileHash, result);
+      console.log(`🎉 Done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
       return result;
     }
     

@@ -106,7 +106,7 @@ export default function BankStatementUpload({ onUploadSuccess }: BankStatementUp
           setUploadStatus("idle");
           setStatusMessage("");
           onUploadSuccess();
-        }, 1200);
+        }, 300);
       } else {
         setUploadStatus("error");
         setStatusMessage("Processing failed. Please try another PDF.");

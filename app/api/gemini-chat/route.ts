@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-// Use gemini-flash-latest (stable alias)
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
+// Server-only key first. NEXT_PUBLIC_ is only honoured as a fallback for older
+// setups, because that prefix bundles the key into the browser JS where any
+// visitor can read it.
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+// gemini-flash-lite-latest: the cheapest generally-available Gemini tier (roughly
+// a quarter to a sixth of standard Flash's per-token price), and a "latest" alias
+// so it keeps tracking Google's current Lite model instead of pointing at a dated
+// version that eventually gets sunset. It does not support "thinking" at all -
+// sending thinkingConfig rejects the request outright - but that's fine here:
+// nothing in this app needs reasoning, only fast structured extraction and
+// grounded answers over data already supplied in the prompt.
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent";
 
 /**
  * Server-side proxy for Gemini AI chat requests
@@ -37,11 +46,17 @@ export async function POST(req: NextRequest) {
             },
             body: JSON.stringify({
                 contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: config || {
+                generationConfig: {
                     temperature: 0.7,
                     topP: 0.95,
                     topK: 40,
                     maxOutputTokens: 2048,
+                    ...(config || {}),
+                    // gemini-flash-lite-latest rejects thinkingConfig outright (it is not
+                    // a thinking model), so any caller-supplied value is dropped here
+                    // rather than forwarded - a caller written for a different model
+                    // must not be able to break every request through this route.
+                    thinkingConfig: undefined,
                 }
             })
         });
